@@ -1,0 +1,3205 @@
+/**
+ * AquaData Studio v5.0 — Studio Hydraulique EPANET Professionnel (.INP)
+ * Moteur complet d'importation, parsing, normalisation automatique des coordonnées (WGS84 / UTM / Local),
+ * panneau latéral d'inspection et d'édition en direct (Side Inspector),
+ * remplacement et suppression d'éléments (Jonction ⇄ Réservoir ⇄ Pompe ⇄ Vanne),
+ * zoom/pan intelligent empêchant toute disparition du réseau, et affichage 24h conditionné au calcul hydraulique.
+ */
+
+export class EpanetSynopticViewer {
+    constructor(containerId, options = {}) {
+        this.containerId = containerId;
+        this.container = document.getElementById(containerId);
+        this.options = options;
+        this.currentHour = 0;
+        this.isPlaying = false;
+        this.playInterval = null;
+        this.model = null;
+        this.simResults = null;
+        this.isSimulated = false; // Results appear ONLY after user runs simulation
+        this.activeTab = 'canvas'; // 'canvas' | 'table-browser' | 'patterns' | 'graphs' | 'options'
+        this.tableCategory = 'junctions'; // 'junctions' | 'reservoirs' | 'tanks' | 'pipes' | 'pumps' | 'valves'
+        this.selectedElement = null; // { type: 'junction'|'reservoir'|'tank'|'pipe'|'pump'|'valve', id: string }
+        this.colorModeNodes = 'pressure'; // 'pressure' | 'head' | 'demand' | 'elevation'
+        this.colorModeLinks = 'flow'; // 'flow' | 'velocity' | 'headloss' | 'diameter'
+        this.zoom = 1.0;
+        this.panX = 0;
+        this.panY = 0;
+        this.isDragging = false;
+        this.dragStart = { x: 0, y: 0 };
+        this.editMode = 'select'; // 'select' | 'move'
+        this.chartInstance = null;
+        this.patternChartInstance = null;
+
+        this.init();
+    }
+
+    async init() {
+        if (!this.container) return;
+        this.renderShell();
+        this.bindEvents();
+        // Load default network (Le Kef AEP 24h)
+        this.loadPreset('lekef');
+    }
+
+    renderShell() {
+        this.container.innerHTML = `
+            <div class="epanet-studio-wrapper">
+                <!-- Top Toolbar & Model Bar -->
+                <div class="epanet-toolbar-main">
+                    <div class="epanet-toolbar-left">
+                        <div class="epanet-brand">
+                            <span class="epanet-logo-badge">🌊 EPANET 2.2</span>
+                            <div>
+                                <strong id="epanet-model-title">Réseau AEP — Le Kef</strong>
+                                <small id="epanet-model-sub">Modélisation Hydraulique 24h & Éditeur Visuel Intégré</small>
+                            </div>
+                        </div>
+
+                        <div class="epanet-preset-select-group">
+                            <label for="epanet-preset-select">Modèle :</label>
+                            <select id="epanet-preset-select" class="scada-select epanet-select">
+                                <option value="lekef">💧 Le Kef Réseau AEP 24h (12 Forages / 12 Réservoirs)</option>
+                                <option value="net1">📘 EPANET Net1 (Exemple Standard EPA)</option>
+                                <option value="net3">📙 EPANET Net3 (Double Boucle & Multi-Réservoirs)</option>
+                                <option value="hanoi">🏛️ Hanoi Water Supply Network (Réseau Urbain)</option>
+                                <option value="custom" disabled id="epanet-opt-custom">📁 Modèle .INP Importé</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="epanet-toolbar-right">
+                        <input type="file" id="epanet-file-input" accept=".inp,.txt" style="display:none;">
+                        <button id="epanet-btn-import" class="btn-scada btn-primary-glow" title="Importer un fichier .INP (remplace le réseau actuel)">
+                            📁 Importer .INP
+                        </button>
+                        <button id="epanet-btn-export-inp" class="btn-scada" title="Télécharger le fichier .INP actuel">
+                            💾 Exporter .INP
+                        </button>
+                        <button id="epanet-btn-run-sim" class="btn-scada btn-optimal-glow" title="Lancer la résolution hydraulique 24h">
+                            ⚡ Calculer Hydraulique
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Navigation Tabs Bar -->
+                <div class="epanet-subtabs-bar">
+                    <div class="epanet-tab-group">
+                        <button class="epanet-nav-tab active" data-subtab="canvas">🗺️ Schéma & Éditeur Vectoriel</button>
+                        <button class="epanet-nav-tab" data-subtab="table-browser">📋 Tables EPANET (<span id="epanet-count-total">0</span>)</button>
+                        <button class="epanet-nav-tab" data-subtab="patterns">📊 Courbes de Modulation (<span id="epanet-count-patterns">0</span>)</button>
+                        <button class="epanet-nav-tab" data-subtab="graphs">📈 Courbes & Profils 24h</button>
+                        <button class="epanet-nav-tab" data-subtab="options">⚙️ Paramètres & Équations</button>
+                    </div>
+
+                    <!-- 24h Time Playback Controller -->
+                    <div class="epanet-playback-strip">
+                        <button id="ep-btn-play" class="btn-playback" title="Lecture automatique">▶</button>
+                        <button id="ep-btn-prev" class="btn-playback" title="Heure précédente">-1h</button>
+                        <span id="ep-hour-tag" class="ep-hour-tag">00:00</span>
+                        <input type="range" id="ep-time-slider" min="0" max="23" value="0" class="ep-slider">
+                        <button id="ep-btn-next" class="btn-playback" title="Heure suivante">+1h</button>
+                    </div>
+                </div>
+
+                <!-- Visualization Settings & Tools Bar -->
+                <div class="epanet-view-settings-bar" style="flex-wrap: wrap; gap: 0.4rem;">
+                    <!-- Tracing & Editing Palette -->
+                    <div class="vset-item" style="gap: 3px;">
+                        <span style="font-weight:700; color:#38bdf8;">Outils :</span>
+                        <button id="ep-tool-select" class="btn-scada-mini active" title="Sélectionner / Inspecter élément">👆 Sélection</button>
+                        <button id="ep-tool-move" class="btn-scada-mini" title="Déplacer les nœuds sur le schéma">🖐️ Déplacer</button>
+                        <button id="ep-tool-add-junction" class="btn-scada-mini" title="Ajouter une jonction (clic sur le schéma)">📍 + Jonction</button>
+                        <button id="ep-tool-add-reservoir" class="btn-scada-mini" title="Ajouter un réservoir fixe">💧 + Réservoir</button>
+                        <button id="ep-tool-add-tank" class="btn-scada-mini" title="Ajouter une cuve / bâche">🏛️ + Cuve</button>
+                        <button id="ep-tool-add-pipe" class="btn-scada-mini" title="Tracer une conduite (cliquer nœud départ puis nœud arrivée)">〰️ + Conduite</button>
+                        <button id="ep-tool-add-pump" class="btn-scada-mini" title="Ajouter une pompe entre 2 nœuds">⚡ + Pompe</button>
+                        <button id="ep-tool-add-valve" class="btn-scada-mini" title="Ajouter une vanne entre 2 nœuds">🚪 + Vanne</button>
+                    </div>
+
+                    <div class="vset-item">
+                        <span>Nœuds :</span>
+                        <select id="ep-color-nodes" class="scada-select-sm">
+                            <option value="pressure">Pression (mCE / bar)</option>
+                            <option value="head">Charge Piézométrique (m)</option>
+                            <option value="demand">Demande Débit (m³/h)</option>
+                            <option value="elevation">Élévation / Altitude (m)</option>
+                        </select>
+                    </div>
+                    <div class="vset-item">
+                        <span>Conduites :</span>
+                        <select id="ep-color-links" class="scada-select-sm">
+                            <option value="flow">Débit Q (m³/h)</option>
+                            <option value="velocity">Vitesse V (m/s)</option>
+                            <option value="headloss">Perte de Charge (m/km)</option>
+                            <option value="diameter">Diamètre (mm)</option>
+                        </select>
+                    </div>
+                    <div class="vset-item">
+                        <label><input type="checkbox" id="ep-chk-grid" checked> <span>📐 Grille (Δ)</span></label>
+                        <label><input type="checkbox" id="ep-chk-labels" checked> <span>IDs</span></label>
+                        <label><input type="checkbox" id="ep-chk-flow-arrows" checked> <span>Flèches</span></label>
+                        <label><input type="checkbox" id="ep-chk-tanks-water" checked> <span>Niveaux</span></label>
+                    </div>
+
+                    <!-- Zoom Controls -->
+                    <div class="vset-zoom-actions">
+                        <button id="ep-zoom-in" class="btn-scada-mini" title="Zoom avant (+)">🔍 +</button>
+                        <button id="ep-zoom-fit" class="btn-scada-mini" title="Ajuster et centrer la vue (⛶)">⛶ Recadrer</button>
+                        <button id="ep-zoom-out" class="btn-scada-mini" title="Zoom arrière (-)">🔍 -</button>
+                        <button id="ep-zoom-reset" class="btn-scada-mini" title="Réinitialiser zoom 100%">1:1</button>
+                    </div>
+                </div>
+
+                <!-- Simulation State Alert Banner -->
+                <div id="ep-sim-state-banner" style="background: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.4); color: #fbbf24; padding: 0.45rem 0.85rem; border-radius: 6px; font-size: 0.78rem; display: flex; align-items: center; justify-content: space-between;">
+                    <span>⚠️ Mode Topologie Structurelle : Cliquez sur <strong>⚡ Calculer Hydraulique</strong> pour résoudre les équations et afficher les pressions, débits et graphiques 24h.</span>
+                    <button id="btn-banner-sim" class="btn-scada-mini btn-optimal-glow">Calculer Maintenant ⚡</button>
+                </div>
+
+                <!-- Main Content Body (Panes) -->
+                <div class="epanet-main-body" style="margin-top: 0.5rem;">
+                    <!-- 1. Canvas Pane with Bottom Docked Inspector -->
+                    <div id="ep-pane-canvas" class="ep-subpane active">
+                        <div class="ep-canvas-pane-layout" style="display: flex; flex-direction: column; gap: 0.85rem;">
+                            <!-- SVG Vector Canvas (Full Width 100%, Height 520px) -->
+                            <div class="ep-canvas-wrapper" id="ep-canvas-wrapper" style="width: 100%; height: 520px; position: relative; background: #080a1c; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; overflow: hidden;">
+                                <svg id="ep-svg-canvas" class="ep-svg-canvas" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid meet" style="width:100%; height:100%; cursor:grab;">
+                                    <defs>
+                                        <marker id="ep-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#06b6d4"/>
+                                        </marker>
+                                        <linearGradient id="ep-tank-water-grad" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.9"/>
+                                            <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.95"/>
+                                        </linearGradient>
+                                    </defs>
+                                    <g id="ep-canvas-viewport">
+                                        <g id="ep-layer-grid"></g>
+                                        <g id="ep-layer-links"></g>
+                                        <g id="ep-layer-nodes"></g>
+                                        <g id="ep-layer-labels"></g>
+                                    </g>
+                                </svg>
+
+                                <!-- Drop File Overlay -->
+                                <div id="ep-drop-overlay" class="ep-drop-overlay" style="display:none;">
+                                    <div class="drop-msg">
+                                        <span style="font-size:3rem;">📥</span>
+                                        <h3>Déposez votre fichier .INP ici</h3>
+                                        <p>AquaData Studio remplacera les données actuelles par ce réseau</p>
+                                    </div>
+                                </div>
+
+                                <!-- Legend Card -->
+                                <div class="ep-legend-card" id="ep-legend-card">
+                                    <div class="leg-title" id="leg-title">Pression Nœuds (mCE)</div>
+                                    <div class="leg-gradient-bar" id="leg-grad-bar" style="background: linear-gradient(90deg, #3b82f6, #06b6d4, #10b981, #f59e0b, #ef4444);"></div>
+                                    <div class="leg-labels">
+                                        <span id="leg-min">0 mCE</span>
+                                        <span id="leg-mid">35 mCE</span>
+                                        <span id="leg-max">70 mCE</span>
+                                    </div>
+                                </div>
+
+                                <!-- Interactive Coordinate HUD & Scale Status Strip -->
+                                <div id="ep-canvas-coord-bar" class="ep-canvas-coord-bar">
+                                    <div style="display:flex; align-items:center; gap: 12px;">
+                                        <span style="color:#38bdf8; font-weight:700;"><span id="ep-stat-cursor-x">X: 0.0</span> m, <span id="ep-stat-cursor-y">Y: 0.0</span> m</span>
+                                        <span style="color:#475569;">|</span>
+                                        <span id="ep-stat-grid-step" style="color:#a5b4fc;">📐 Grille: Δ = 100 m</span>
+                                        <span style="color:#475569;">|</span>
+                                        <span id="ep-stat-zoom" style="color:#34d399;">🔍 Zoom: 100%</span>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap: 10px;">
+                                        <span id="ep-stat-elements" style="color:#cbd5e1;">🌐 Réseau: 0 Nœuds · 0 Conduites</span>
+                                        <span id="ep-stat-mode" style="background: rgba(56,189,248,0.15); color: #38bdf8; padding: 2px 7px; border-radius: 4px; font-weight:600;">Mode: Sélection</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Docked Property Inspector BELOW the Schema (with margin and full breathing space) -->
+                            <div id="ep-side-inspector" style="width: 100%; background: rgba(15,18,44,0.92); border: 1px solid rgba(6,182,212,0.35); border-radius: 10px; padding: 0.85rem 1.25rem; display: flex; flex-direction: column; gap: 0.65rem; box-shadow: 0 8px 30px rgba(0,0,0,0.4); backdrop-filter: blur(12px);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.4rem;">
+                                    <div style="display:flex; align-items:center; gap:0.6rem;">
+                                        <span id="side-insp-icon" style="font-size:1.3rem;">📍</span>
+                                        <strong id="side-insp-title" style="color:#fff; font-size:0.95rem;">Inspecteur d'Élément EPANET</strong>
+                                        <span id="side-insp-badge" style="background:rgba(6,182,212,0.15); color:#38bdf8; font-size:0.72rem; padding:2px 8px; border-radius:4px; font-weight:600;">Sélection</span>
+                                    </div>
+                                    <button id="side-insp-close" class="btn-scada-mini" title="Fermer">✕ Fermer</button>
+                                </div>
+
+                                <div id="side-insp-empty" style="text-align:center; padding: 1.25rem 1rem; color:var(--text-muted); font-size:0.85rem;">
+                                    <span style="font-size:1.6rem; display:inline-block; vertical-align:middle; margin-right:0.5rem;">👆</span>
+                                    Cliquez sur un nœud, réservoir, cuve ou conduite sur le schéma pour afficher et modifier ses caractéristiques dans ce panneau.
+                                </div>
+
+                                <div id="side-insp-content" style="display: none; flex-direction: column; gap: 0.75rem;">
+                                    <!-- Horizontal Grid for Fields -->
+                                    <div id="side-insp-fields" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.75rem;"></div>
+
+                                    <!-- Bottom Action Bar -->
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.4rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.6rem; flex-wrap: wrap; gap: 0.5rem;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 250px;">
+                                            <label style="font-size:0.75rem; color:var(--text-muted); white-space:nowrap;">Type :</label>
+                                            <select id="side-select-type" class="scada-select-sm" style="flex:1;">
+                                                <option value="junction">📍 Jonction (Nœud standard)</option>
+                                                <option value="reservoir">💧 Source / Réservoir fixe</option>
+                                                <option value="tank">🏛️ Bâche / Cuve à niveau</option>
+                                                <option value="pipe">〰️ Tuyau / Canalisation</option>
+                                                <option value="pump">⚡ Pompe / Station</option>
+                                                <option value="valve">🚪 Vanne / Régulateur</option>
+                                            </select>
+                                        </div>
+                                        <div style="display: flex; gap: 0.5rem;">
+                                            <button id="side-btn-save" class="btn-scada btn-primary-glow">💾 Enregistrer Modifications</button>
+                                            <button id="side-btn-graph" class="btn-scada">📈 Courbe 24h</button>
+                                            <button id="side-btn-delete" class="btn-scada btn-danger">🗑️ Supprimer</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. EPANET Categorized Table Browser Pane -->
+                    <div id="ep-pane-table-browser" class="ep-subpane">
+                        <div class="table-browser-wrapper" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                            <!-- Category Filter Bar -->
+                            <div class="category-tabs-bar" style="display: flex; gap: 0.4rem; background: rgba(15,18,44,0.7); padding: 0.5rem; border-radius: 8px; flex-wrap: wrap;">
+                                <button class="btn-cat-tab active" data-cat="junctions">📍 Jonctions (<span id="cat-count-junctions">0</span>)</button>
+                                <button class="btn-cat-tab" data-cat="reservoirs">💧 Sources / Réservoirs (<span id="cat-count-reservoirs">0</span>)</button>
+                                <button class="btn-cat-tab" data-cat="tanks">🏛️ Bâches / Cuves (<span id="cat-count-tanks">0</span>)</button>
+                                <button class="btn-cat-tab" data-cat="pipes">〰️ Tuyaux / Conduites (<span id="cat-count-pipes">0</span>)</button>
+                                <button class="btn-cat-tab" data-cat="pumps">⚡ Pompes / Stations (<span id="cat-count-pumps">0</span>)</button>
+                                <button class="btn-cat-tab" data-cat="valves">🚪 Vannes / Régulateurs (<span id="cat-count-valves">0</span>)</button>
+                            </div>
+
+                            <div class="scada-table-card" style="max-height: 540px; overflow: auto;">
+                                <table class="scada-table" id="ep-cat-table">
+                                    <thead><tr id="ep-cat-thead"></tr></thead>
+                                    <tbody id="ep-cat-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. Modulation Patterns [PATTERNS] Editor Pane -->
+                    <div id="ep-pane-patterns" class="ep-subpane">
+                        <div class="patterns-editor-wrapper" style="display: grid; grid-template-columns: 320px 1fr; gap: 1rem;">
+                            <!-- Pattern List Card -->
+                            <div class="scada-card" style="padding: 1rem; background: rgba(18,20,48,0.75);">
+                                <h4 style="margin-top:0; color:#38bdf8; font-size:0.9rem;">Courbes de Demande [PATTERNS]</h4>
+                                <div id="patterns-list-container" style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 440px; overflow-y: auto;"></div>
+                            </div>
+
+                            <!-- Pattern Chart & Multiplier Editor -->
+                            <div class="scada-card" style="padding: 1.25rem; background: rgba(18,20,48,0.75); display: flex; flex-direction: column; gap: 1rem;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:0.6rem;">
+                                    <div>
+                                        <strong id="pattern-active-title" style="color:#fff; font-size:1.05rem;">Pattern 1</strong>
+                                        <small id="pattern-active-desc" style="display:block; color:var(--text-muted); font-size:0.75rem;">Coefficients multiplicateurs horaires (00h à 23h)</small>
+                                    </div>
+                                    <button id="btn-save-pattern" class="btn-scada btn-primary-glow">💾 Enregistrer Pattern</button>
+                                </div>
+                                <div style="height: 240px; position: relative;">
+                                    <canvas id="ep-pattern-chart"></canvas>
+                                </div>
+                                <div id="pattern-multipliers-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(75px, 1fr)); gap: 0.4rem; max-height: 160px; overflow-y: auto;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4. 24h Graphs Pane -->
+                    <div id="ep-pane-graphs" class="ep-subpane">
+                        <div class="ep-graphs-wrapper" style="display: flex; flex-direction: column; gap: 1rem;">
+                            <div class="graph-selector-bar" style="display: flex; gap: 1rem; align-items: center; background: rgba(18,20,48,0.75); padding: 0.75rem 1rem; border-radius: 8px; flex-wrap: wrap;">
+                                <div style="display:flex; align-items:center; gap:0.5rem;">
+                                    <label>Type de Graphe :</label>
+                                    <select id="ep-graph-type" class="scada-select">
+                                        <option value="node_pressure">📉 Pression Temporelle (Nœud)</option>
+                                        <option value="node_head">📈 Charge Piézométrique Temporelle (Nœud)</option>
+                                        <option value="link_flow">📊 Débit Horaire Q (Canalisation / Pompe)</option>
+                                        <option value="link_velocity">〰️ Vitesse d'Écoulement V (Conduite)</option>
+                                        <option value="tank_volume">💧 Niveau & Volume d'Eau (Réservoir / Cuve)</option>
+                                        <option value="energy_pumps">⚡ Consommation Électrique Globale (kW / kWh)</option>
+                                    </select>
+                                </div>
+                                <div style="display:flex; align-items:center; gap:0.5rem;">
+                                    <label>Élément :</label>
+                                    <select id="ep-graph-element" class="scada-select" style="min-width: 180px;"></select>
+                                </div>
+                            </div>
+
+                            <div class="scada-card" style="height: 480px; position: relative; padding: 1.25rem;">
+                                <canvas id="ep-main-chart"></canvas>
+                                <div id="ep-graph-no-sim-msg" style="display:none; position:absolute; inset:0; background:rgba(15,18,44,0.92); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0.75rem;">
+                                    <span style="font-size:2.5rem;">⚡</span>
+                                    <strong style="color:#fff; font-size:1.1rem;">Aucun résultat hydraulique disponible</strong>
+                                    <p style="color:var(--text-muted); font-size:0.85rem; margin:0;">Cliquez sur « ⚡ Calculer Hydraulique » pour générer les profils et courbes temporelles 24h.</p>
+                                    <button class="btn-scada btn-optimal-glow" onclick="document.getElementById('epanet-btn-run-sim').click()">⚡ Lancer le Calcul Hydraulique</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 5. Options & Equations Pane -->
+                    <div id="ep-pane-options" class="ep-subpane">
+                        <div class="scada-card" style="padding: 1.5rem; max-width: 800px; margin: 0 auto; background: rgba(18,20,48,0.75);">
+                            <h3 style="color:#38bdf8; margin-top:0; font-size:1.1rem;">⚙️ Paramètres Hydrauliques du Solveur EPANET</h3>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
+                                <div>
+                                    <label style="color:var(--text-muted); font-size:0.75rem; display:block;">Formule de Perte de Charge :</label>
+                                    <strong style="color:#fff; font-family:var(--font-mono);">H-W (Hazen-Williams)</strong>
+                                </div>
+                                <div>
+                                    <label style="color:var(--text-muted); font-size:0.75rem; display:block;">Unités de Débit :</label>
+                                    <strong style="color:#fff; font-family:var(--font-mono);">CMH (m³/h) / LPS</strong>
+                                </div>
+                                <div>
+                                    <label style="color:var(--text-muted); font-size:0.75rem; display:block;">Durée Totale :</label>
+                                    <strong style="color:#fff; font-family:var(--font-mono);">24 Heures (Pas de 1h)</strong>
+                                </div>
+                                <div>
+                                    <label style="color:var(--text-muted); font-size:0.75rem; display:block;">Précision / Tolérance :</label>
+                                    <strong style="color:#fff; font-family:var(--font-mono);">0.001 (Tolérance Hydraulique)</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer Status Bar -->
+                <div class="epanet-footer-status">
+                    <span id="ep-status-model">Modèle : En attente</span>
+                    <span id="ep-status-sim">Statut Calcul : ⚪ En attente</span>
+                    <span id="ep-status-coord">Position Curseur : X: 0 | Y: 0</span>
+                </div>
+            </div>
+        `;
+    }
+
+    bindEvents() {
+        const fileInput = document.getElementById('epanet-file-input');
+        const btnImport = document.getElementById('epanet-btn-import');
+        const btnExport = document.getElementById('epanet-btn-export-inp');
+        const btnRunSim = document.getElementById('epanet-btn-run-sim');
+        const btnBannerSim = document.getElementById('btn-banner-sim');
+        const presetSelect = document.getElementById('epanet-preset-select');
+        const slider = document.getElementById('ep-time-slider');
+        const btnPlay = document.getElementById('ep-btn-play');
+        const btnPrev = document.getElementById('ep-btn-prev');
+        const btnNext = document.getElementById('ep-btn-next');
+
+        // Subtabs
+        const navTabs = this.container.querySelectorAll('.epanet-nav-tab');
+        navTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                navTabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                this.activeTab = tab.dataset.subtab;
+                
+                this.container.querySelectorAll('.ep-subpane').forEach(p => p.classList.remove('active'));
+                const targetPane = document.getElementById(`ep-pane-${this.activeTab}`);
+                if (targetPane) targetPane.classList.add('active');
+
+                if (this.activeTab === 'table-browser') this.renderCategoryTable();
+                else if (this.activeTab === 'patterns') this.renderPatternsEditor();
+                else if (this.activeTab === 'graphs') this.renderMainChart();
+            });
+        });
+
+        // Category Tabs in Browser
+        this.container.querySelectorAll('.btn-cat-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                this.container.querySelectorAll('.btn-cat-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                this.tableCategory = tab.dataset.cat;
+                this.renderCategoryTable();
+            });
+        });
+
+        // Tracing & Editing Tools Mode Selection
+        const toolButtons = [
+            { id: 'ep-tool-select', mode: 'select' },
+            { id: 'ep-tool-move', mode: 'move' },
+            { id: 'ep-tool-add-junction', mode: 'add_junction' },
+            { id: 'ep-tool-add-reservoir', mode: 'add_reservoir' },
+            { id: 'ep-tool-add-tank', mode: 'add_tank' },
+            { id: 'ep-tool-add-pipe', mode: 'add_pipe' },
+            { id: 'ep-tool-add-pump', mode: 'add_pump' },
+            { id: 'ep-tool-add-valve', mode: 'add_valve' }
+        ];
+
+        toolButtons.forEach(tool => {
+            const btn = document.getElementById(tool.id);
+            btn?.addEventListener('click', () => {
+                toolButtons.forEach(t => document.getElementById(t.id)?.classList.remove('active'));
+                btn.classList.add('active');
+                this.editMode = tool.mode;
+                this.drawingStartNode = null;
+                const statusSpan = document.getElementById('ep-status-coord');
+                if (statusSpan) {
+                    if (tool.mode.startsWith('add_pipe') || tool.mode.startsWith('add_pump') || tool.mode.startsWith('add_valve')) {
+                        statusSpan.textContent = `Mode ${tool.mode}: Cliquez sur le 1er nœud de départ`;
+                    }
+                }
+            });
+        });
+
+        // Zoom actions
+        document.getElementById('ep-zoom-in')?.addEventListener('click', () => this.applyZoom(1.4));
+        document.getElementById('ep-zoom-out')?.addEventListener('click', () => this.applyZoom(0.72));
+        document.getElementById('ep-zoom-fit')?.addEventListener('click', () => this.fitBounds());
+        document.getElementById('ep-zoom-reset')?.addEventListener('click', () => {
+            this.zoom = 1.0;
+            this.panX = 0;
+            this.panY = 0;
+            this.updateTransform();
+            this.renderGrid();
+        });
+
+        // Presets & Files
+        presetSelect?.addEventListener('change', (e) => this.loadPreset(e.target.value));
+        btnImport?.addEventListener('click', () => fileInput?.click());
+        fileInput?.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) this.loadInpFile(e.target.files[0]);
+        });
+        btnExport?.addEventListener('click', () => this.exportInpFile());
+        btnRunSim?.addEventListener('click', () => this.runHydraulicSimulation(true));
+        btnBannerSim?.addEventListener('click', () => this.runHydraulicSimulation(true));
+
+        // Time Playback
+        slider?.addEventListener('input', (e) => this.setTimeHour(parseInt(e.target.value, 10)));
+        btnPrev?.addEventListener('click', () => this.setTimeHour((this.currentHour + 23) % 24));
+        btnNext?.addEventListener('click', () => this.setTimeHour((this.currentHour + 1) % 24));
+        btnPlay?.addEventListener('click', () => this.togglePlay());
+
+        // Color Selectors
+        document.getElementById('ep-color-nodes')?.addEventListener('change', (e) => {
+            this.colorModeNodes = e.target.value;
+            this.renderNetwork();
+            this.updateLegend();
+        });
+        document.getElementById('ep-color-links')?.addEventListener('change', (e) => {
+            this.colorModeLinks = e.target.value;
+            this.renderNetwork();
+            this.updateLegend();
+        });
+        ['ep-chk-labels', 'ep-chk-flow-arrows', 'ep-chk-tanks-water', 'ep-chk-grid'].forEach(id => {
+            document.getElementById(id)?.addEventListener('change', () => this.renderNetwork());
+        });
+
+        // Graph Selector Change
+        document.getElementById('ep-graph-type')?.addEventListener('change', () => this.updateGraphElementOptions());
+        document.getElementById('ep-graph-element')?.addEventListener('change', () => this.renderMainChart());
+
+        // Side Inspector Actions
+        document.getElementById('side-insp-close')?.addEventListener('click', () => this.closeInspector());
+        document.getElementById('side-btn-save')?.addEventListener('click', () => this.saveElementProperties());
+        document.getElementById('side-btn-delete')?.addEventListener('click', () => this.deleteCurrentElement());
+        document.getElementById('side-btn-graph')?.addEventListener('click', () => {
+            const tabGraphs = this.container.querySelector('.epanet-nav-tab[data-subtab="graphs"]');
+            if (tabGraphs) tabGraphs.click();
+            if (this.selectedElement) {
+                const elSelect = document.getElementById('ep-graph-element');
+                if (elSelect) {
+                    elSelect.value = this.selectedElement.id;
+                    this.renderMainChart();
+                }
+            }
+        });
+
+        // Setup SVG Drag / Pan / Double Click / Drawing
+        this.setupSvgInteractions();
+        this.setupDragAndDrop();
+    }
+
+    setupSvgInteractions() {
+        const svg = document.getElementById('ep-svg-canvas');
+        if (!svg) return;
+
+        // Track cursor position in SVG space for cursor-anchored zoom & drawing
+        this._cursorSvgX = 800;
+        this._cursorSvgY = 500;
+
+        svg.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.ep-node-clickable') || e.target.closest('.ep-link-clickable')) return;
+
+            // If in creation mode for nodes, place node on click
+            if (this.editMode === 'add_junction' || this.editMode === 'add_reservoir' || this.editMode === 'add_tank') {
+                const wx = Math.round((this._cursorSvgX - this.panX) / this.zoom);
+                const wy = Math.round((this._cursorSvgY - this.panY) / this.zoom);
+                this.createNewNode(this.editMode.replace('add_', ''), wx, wy);
+                return;
+            }
+
+            // Normal Pan
+            this.isDragging = true;
+            this.dragStart = { x: e.clientX - this.panX, y: e.clientY - this.panY };
+            svg.style.cursor = 'grabbing';
+            e.preventDefault();
+        });
+
+        let panRaf = null;
+        window.addEventListener('mousemove', (e) => {
+            if (!this.isDragging) return;
+            this.panX = e.clientX - this.dragStart.x;
+            this.panY = e.clientY - this.dragStart.y;
+            if (!panRaf) {
+                panRaf = requestAnimationFrame(() => {
+                    this.updateTransform();
+                    this.renderGrid();
+                    panRaf = null;
+                });
+            }
+        }, { passive: true });
+
+        window.addEventListener('mouseup', () => {
+            if (this.isDragging) {
+                this.isDragging = false;
+                if (svg) svg.style.cursor = 'grab';
+                if (panRaf) {
+                    cancelAnimationFrame(panRaf);
+                    panRaf = null;
+                }
+                this.updateTransform();
+                this.renderGrid();
+            }
+        });
+
+        // Track cursor in SVG canvas coordinates (for anchored zoom & drawing)
+        svg.addEventListener('mousemove', (e) => {
+            const rect = svg.getBoundingClientRect();
+            const svgW = svg.viewBox.baseVal.width  || 1600;
+            const svgH = svg.viewBox.baseVal.height || 1000;
+            const scaleX = svgW / rect.width;
+            const scaleY = svgH / rect.height;
+            this._cursorSvgX = (e.clientX - rect.left) * scaleX;
+            this._cursorSvgY = (e.clientY - rect.top)  * scaleY;
+            
+            const wx = (this._cursorSvgX - this.panX) / this.zoom;
+            const wy = (this._cursorSvgY - this.panY) / this.zoom;
+            
+            // Precision adapted to zoom level (down to mm/cm)
+            const precision = this.zoom > 50 ? 3 : this.zoom > 5 ? 2 : 1;
+            const elStatX = document.getElementById('ep-stat-cursor-x');
+            const elStatY = document.getElementById('ep-stat-cursor-y');
+            if (elStatX) elStatX.textContent = `X: ${wx.toFixed(precision)}`;
+            if (elStatY) elStatY.textContent = `Y: ${wy.toFixed(precision)}`;
+            const coordSpan = document.getElementById('ep-status-coord');
+            if (coordSpan && !this.drawingStartNode) {
+                coordSpan.textContent = `X: ${wx.toFixed(precision)} | Y: ${wy.toFixed(precision)} (Zoom: ${(this.zoom * 100).toFixed(0)}%)`;
+            }
+        }, { passive: true });
+
+        // Wheel zoom — anchored on cursor position (smooth and high-range)
+        svg.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const factor = e.deltaY < 0 ? 1.20 : 0.83;
+            this.applyZoomAtPoint(factor, this._cursorSvgX, this._cursorSvgY);
+        }, { passive: false });
+
+        // Double-click: zoom 1.5× centred on click point
+        svg.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            this.applyZoomAtPoint(1.5, this._cursorSvgX, this._cursorSvgY);
+        });
+    }
+
+    /** Créer un nouveau nœud (jonction, réservoir ou bâche) à la position SVG */
+    createNewNode(type, x, y) {
+        if (!this.model) return;
+        if (!this.model.nodes) this.model.nodes = {};
+        if (!this.model.junctions) this.model.junctions = {};
+        if (!this.model.reservoirs) this.model.reservoirs = {};
+        if (!this.model.tanks) this.model.tanks = {};
+
+        let prefix = type === 'reservoir' ? 'R' : type === 'tank' ? 'TK' : 'J';
+        let idx = Object.keys(this.model.nodes).length + 1;
+        let id = `${prefix}${idx}`;
+        while (this.model.nodes[id]) {
+            idx++;
+            id = `${prefix}${idx}`;
+        }
+
+        const newNode = {
+            id,
+            type,
+            elev: 600,
+            rawX: x,
+            rawY: y,
+            x: x,
+            y: y
+        };
+
+        if (type === 'junction') {
+            newNode.baseDemand = 15;
+            newNode.pattern = '1';
+            this.model.junctions[id] = { id, elev: 600, baseDemand: 15, pattern: '1' };
+        } else if (type === 'reservoir') {
+            newNode.head = 700;
+            newNode.pattern = '';
+            this.model.reservoirs[id] = { id, head: 700, pattern: '' };
+        } else if (type === 'tank') {
+            newNode.initLevel = 3.0;
+            newNode.minLevel = 1.0;
+            newNode.maxLevel = 6.0;
+            newNode.diam = 20.0;
+            this.model.tanks[id] = { id, elev: 600, initLevel: 3.0, minLevel: 1.0, maxLevel: 6.0, diam: 20.0 };
+        }
+
+        this.model.nodes[id] = newNode;
+        this.updateCounts();
+        this.renderNetwork();
+        this.inspectElement(type, id);
+
+        const statusSpan = document.getElementById('ep-status-coord');
+        if (statusSpan) statusSpan.textContent = `✨ Élément ${id} (${type}) créé avec succès à (${x}, ${y}) !`;
+    }
+
+    /** Connecter deux nœuds par une conduite, une pompe ou une vanne */
+    handleNodeClickForLink(nodeId) {
+        if (!this.drawingStartNode) {
+            this.drawingStartNode = nodeId;
+            const statusSpan = document.getElementById('ep-status-coord');
+            if (statusSpan) statusSpan.textContent = `📍 Nœud départ sélectionné : ${nodeId}. Cliquez sur le nœud d'arrivée...`;
+            this.renderNetwork();
+            return;
+        }
+
+        if (this.drawingStartNode === nodeId) {
+            this.drawingStartNode = null;
+            const statusSpan = document.getElementById('ep-status-coord');
+            if (statusSpan) statusSpan.textContent = `Sélection annulée.`;
+            this.renderNetwork();
+            return;
+        }
+
+        const nFrom = this.drawingStartNode;
+        const nTo = nodeId;
+        this.drawingStartNode = null;
+
+        const linkType = this.editMode === 'add_pump' ? 'pump' : this.editMode === 'add_valve' ? 'valve' : 'pipe';
+        let prefix = linkType === 'pump' ? 'PMP' : linkType === 'valve' ? 'VLV' : 'P';
+        let idx = Object.keys(this.model.links || {}).length + 1;
+        let id = `${prefix}${idx}`;
+        while (this.model.links && this.model.links[id]) {
+            idx++;
+            id = `${prefix}${idx}`;
+        }
+
+        if (!this.model.links) this.model.links = {};
+        if (!this.model.pipes) this.model.pipes = {};
+        if (!this.model.pumps) this.model.pumps = {};
+        if (!this.model.valves) this.model.valves = {};
+
+        // Calculer longueur géométrique approchée
+        const p1 = this.model.nodes[nFrom];
+        const p2 = this.model.nodes[nTo];
+        const dist = (p1 && p2 && p1.x !== undefined && p2.x !== undefined)
+            ? Math.round(Math.hypot(p2.x - p1.x, p2.y - p1.y) * 4)
+            : 1000;
+
+        if (linkType === 'pump') {
+            this.model.pumps[id] = { id, from: nFrom, to: nTo, power: 75, status: 'OPEN' };
+            this.model.links[id] = { ...this.model.pumps[id], type: 'pump' };
+        } else if (linkType === 'valve') {
+            this.model.valves[id] = { id, from: nFrom, to: nTo, diam: 200, type: 'PRV', setting: 50, status: 'OPEN' };
+            this.model.links[id] = { ...this.model.valves[id], type: 'valve' };
+        } else {
+            this.model.pipes[id] = { id, from: nFrom, to: nTo, length: Math.max(100, dist), diam: 300, roughness: 130, status: 'OPEN' };
+            this.model.links[id] = { ...this.model.pipes[id], type: 'pipe' };
+        }
+
+        this.updateCounts();
+        this.renderNetwork();
+        this.inspectElement(linkType, id);
+
+        const statusSpan = document.getElementById('ep-status-coord');
+        if (statusSpan) statusSpan.textContent = `✨ ${linkType.toUpperCase()} ${id} tracé(e) entre ${nFrom} et ${nTo} !`;
+    }
+
+    setupDragAndDrop() {
+        const wrapper = document.getElementById('ep-canvas-wrapper');
+        const overlay = document.getElementById('ep-drop-overlay');
+        if (!wrapper || !overlay) return;
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            wrapper.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                overlay.style.display = 'flex';
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            wrapper.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                overlay.style.display = 'none';
+            });
+        });
+
+        wrapper.addEventListener('drop', (e) => {
+            e.preventDefault();
+            overlay.style.display = 'none';
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                this.loadInpFile(e.dataTransfer.files[0]);
+            }
+        });
+    }
+
+    /**
+     * Zoom centré sur un point précis du SVG (coordonnées viewBox).
+     * Identique au comportement EPANET : le point sous le curseur reste fixe.
+     */
+    applyZoomAtPoint(factor, svgX, svgY) {
+        const minZoom = 0.02;
+        const maxZoom = 250.0; // Up to 25,000% deep zoom — can observe millimeter details
+        const newZoom = Math.max(minZoom, Math.min(maxZoom, this.zoom * factor));
+        if (newZoom === this.zoom) return;
+
+        this.panX = svgX - (svgX - this.panX) * (newZoom / this.zoom);
+        this.panY = svgY - (svgY - this.panY) * (newZoom / this.zoom);
+        this.zoom = newZoom;
+        this.updateTransform();
+
+        if (this._gridRaf) cancelAnimationFrame(this._gridRaf);
+        this._gridRaf = requestAnimationFrame(() => this.renderGrid());
+    }
+
+    /** Legacy helper used by toolbar buttons — zooms toward current cursor or canvas centre */
+    applyZoom(factor) {
+        const svg = document.getElementById('ep-svg-canvas');
+        let cx = 800, cy = 500;
+        if (svg) {
+            cx = this._cursorSvgX !== undefined ? this._cursorSvgX : (svg.viewBox.baseVal.width  || 1600) / 2;
+            cy = this._cursorSvgY !== undefined ? this._cursorSvgY : (svg.viewBox.baseVal.height || 1000) / 2;
+        }
+        this.applyZoomAtPoint(factor, cx, cy);
+    }
+
+    updateTransform() {
+        const vp = document.getElementById('ep-canvas-viewport');
+        if (vp) {
+            vp.setAttribute('transform', `translate(${this.panX.toFixed(2)}, ${this.panY.toFixed(2)}) scale(${this.zoom.toFixed(4)})`);
+        }
+        const elStatZoom = document.getElementById('ep-stat-zoom');
+        if (elStatZoom) elStatZoom.textContent = `🔍 Zoom: ${(this.zoom * 100).toFixed(0)}%`;
+    }
+
+    fitBounds() {
+        if (!this.model || !this.model.nodes || Object.keys(this.model.nodes).length === 0) {
+            this.zoom = 1.0; this.panX = 0; this.panY = 0;
+            this.updateTransform();
+            return;
+        }
+        const svg = document.getElementById('ep-svg-canvas');
+        if (!svg) { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.updateTransform(); return; }
+
+        const svgW = svg.viewBox.baseVal.width  || 1600;
+        const svgH = svg.viewBox.baseVal.height || 1000;
+
+        // Compute content bounding box in world (node) coordinates
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        Object.values(this.model.nodes).forEach(n => {
+            if (n.x !== undefined && n.y !== undefined && !isNaN(n.x) && !isNaN(n.y)) {
+                if (n.x < minX) minX = n.x;
+                if (n.x > maxX) maxX = n.x;
+                if (n.y < minY) minY = n.y;
+                if (n.y > maxY) maxY = n.y;
+            }
+        });
+
+        if (minX === Infinity) { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.updateTransform(); return; }
+
+        // Add padding around the network
+        const PAD = 80;
+        const contentW = (maxX - minX) || 1;
+        const contentH = (maxY - minY) || 1;
+
+        // Scale so the content fills the canvas with padding
+        const scaleX = (svgW - PAD * 2) / contentW;
+        const scaleY = (svgH - PAD * 2) / contentH;
+        const newZoom = Math.max(0.3, Math.min(8.0, Math.min(scaleX, scaleY)));
+
+        // Centre the content in the viewport
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+        this.zoom = newZoom;
+        this.panX = svgW / 2 - cx * newZoom;
+        this.panY = svgH / 2 - cy * newZoom;
+        this.updateTransform();
+    }
+
+    /**
+     * Zoom & pan to centre a specific element (node or link midpoint) — like EPANET's
+     * "zoom to element" when you click on it in the data table.
+     */
+    zoomToElement(id) {
+        if (!this.model) return;
+        const node = this.model.nodes[id];
+        const link = this.model.links[id];
+        let targetX, targetY;
+
+        if (node && node.x !== undefined) {
+            targetX = node.x;
+            targetY = node.y;
+        } else if (link) {
+            const n1 = this.model.nodes[link.from];
+            const n2 = this.model.nodes[link.to];
+            if (n1 && n2) {
+                targetX = (n1.x + n2.x) / 2;
+                targetY = (n1.y + n2.y) / 2;
+            }
+        }
+
+        if (targetX === undefined) return;
+
+        const svg = document.getElementById('ep-svg-canvas');
+        if (!svg) return;
+        const svgW = svg.viewBox.baseVal.width  || 1600;
+        const svgH = svg.viewBox.baseVal.height || 1000;
+        const targetZoom = Math.min(3.5, this.zoom < 1.5 ? 2.5 : this.zoom);
+
+        // Centre the element in the viewport
+        this.zoom = targetZoom;
+        this.panX = svgW / 2 - targetX * targetZoom;
+        this.panY = svgH / 2 - targetY * targetZoom;
+        this.updateTransform();
+    }
+
+    normalizeModelCoordinates() {
+        if (!this.model || !this.model.nodes || Object.keys(this.model.nodes).length === 0) return;
+        const nodes = Object.values(this.model.nodes);
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        nodes.forEach(n => {
+            const rx = n.rawX !== undefined ? n.rawX : n.x;
+            const ry = n.rawY !== undefined ? n.rawY : n.y;
+            if (rx !== undefined && ry !== undefined && !isNaN(rx) && !isNaN(ry)) {
+                n.rawX = rx;
+                n.rawY = ry;
+                if (rx < minX) minX = rx;
+                if (rx > maxX) maxX = rx;
+                if (ry < minY) minY = ry;
+                if (ry > maxY) maxY = ry;
+            }
+        });
+
+        if (minX === Infinity) return;
+
+        const spanX = maxX - minX || 1;
+        const spanY = maxY - minY || 1;
+
+        // Target SVG canvas area with generous padding — nodes will be placed in world coords
+        // and fitBounds() will compute the correct zoom/pan to show them all.
+        // We keep a 1:1 mapping scaled to fit neatly in ~1200x700 logical units.
+        const targetW = 1200;
+        const targetH = 700;
+        const scale = Math.min(targetW / spanX, targetH / spanY);
+
+        // Clamp scale: avoid elements being placed microscopically close or absurdly far
+        const clampedScale = Math.max(0.02, Math.min(scale, 200));
+
+        const offsetX = 200 + (targetW - spanX * clampedScale) / 2;
+        const offsetY = 150 + (targetH - spanY * clampedScale) / 2;
+
+        nodes.forEach(n => {
+            // EPANET Cartesian Y increases upward → invert for SVG (Y increases downward)
+            n.x = offsetX + (n.rawX - minX) * clampedScale;
+            n.y = offsetY + (maxY - n.rawY) * clampedScale;
+        });
+
+        // Also normalize VERTICES (polyline bend points) for links
+        if (this.model.links) {
+            Object.values(this.model.links).forEach(link => {
+                if (link.vertices && link.vertices.length > 0) {
+                    link.vertices.forEach(v => {
+                        if (v.rawX !== undefined && v.rawY !== undefined && !isNaN(v.rawX) && !isNaN(v.rawY)) {
+                            v.x = offsetX + (v.rawX - minX) * clampedScale;
+                            v.y = offsetY + (maxY - v.rawY) * clampedScale;
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    async loadPreset(presetKey) {
+        // Complete clear of old network data
+        this.model = null;
+        this.simResults = null;
+        this.isSimulated = false;
+
+        if (presetKey === 'lekef') {
+            this.model = this.createLeKefModel();
+        } else if (presetKey === 'net1') {
+            this.model = this.createNet1Model();
+        } else if (presetKey === 'net3') {
+            this.model = this.createNet3Model();
+        } else if (presetKey === 'hanoi') {
+            this.model = this.createHanoiModel();
+        }
+
+        this.normalizeModelCoordinates();
+
+        const titleMap = {
+            lekef: 'Réseau AEP — Le Kef (12 Forages / 12 Réservoirs / 7 Étages)',
+            net1: 'EPANET Net1 — Exemple de Réseau EPA Standard',
+            net3: 'EPANET Net3 — Double Boucle & Multi-Réservoirs',
+            hanoi: 'Hanoi Water Supply Network — Benchmark Hazen-Williams'
+        };
+        const titleEl = document.getElementById('epanet-model-title');
+        if (titleEl) titleEl.textContent = titleMap[presetKey] || 'Modèle EPANET';
+
+        this.updateCounts();
+        this.renderNetwork();
+        this.fitBounds();
+        this.updateGraphElementOptions();
+        this.updateBannerState();
+        this.closeInspector();
+    }
+
+    async loadInpFile(file) {
+        try {
+            // WIPE OUT EXISTING DATA COMPLETELY
+            this.model      = null;
+            this.simResults = null;
+            this.isSimulated = false;
+
+            const text  = await file.text();
+            this.model  = this.parseInp(text);
+
+            const nNodes = Object.keys(this.model.nodes).length;
+            const nLinks = Object.keys(this.model.links).length;
+
+            if (nNodes === 0) {
+                throw new Error('Aucun nœud trouvé dans le fichier. Vérifiez que le fichier contient les sections [JUNCTIONS], [RESERVOIRS] et [COORDINATES].');
+            }
+
+            this.normalizeModelCoordinates();
+
+            const titleEl = document.getElementById('epanet-model-title');
+            if (titleEl) titleEl.textContent = `${file.name} (${nNodes} nœuds · ${nLinks} conduites)`;
+
+            const customOpt = document.getElementById('epanet-opt-custom');
+            if (customOpt) {
+                customOpt.disabled  = false;
+                customOpt.textContent = `📁 ${file.name}`;
+                customOpt.selected  = true;
+            }
+
+            this.updateCounts();
+            this.renderNetwork();  // render first so nodes have SVG positions
+            this.fitBounds();      // then auto-zoom to content bounding box
+            this.updateGraphElementOptions();
+            this.updateBannerState();
+            this.closeInspector();
+
+            alert(`✅ ${file.name} importé : ${nNodes} nœuds, ${nLinks} conduites.\n→ Cliquez sur « ⚡ Calculer Hydraulique » pour lancer la simulation 24h.`);
+        } catch (err) {
+            console.error('INP parse error:', err);
+            alert(`❌ Erreur lors du chargement .INP :\n${err.message}`);
+        }
+    }
+
+    updateBannerState() {
+        const banner = document.getElementById('ep-sim-state-banner');
+        const graphNoSim = document.getElementById('ep-graph-no-sim-msg');
+        const statusSim = document.getElementById('ep-status-sim');
+
+        if (!this.isSimulated) {
+            if (banner) banner.style.display = 'flex';
+            if (graphNoSim) graphNoSim.style.display = 'flex';
+            if (statusSim) statusSim.innerHTML = `Statut Calcul : <span style="color:#fbbf24;">⚠️ En attente du calcul</span>`;
+        } else {
+            if (banner) banner.style.display = 'none';
+            if (graphNoSim) graphNoSim.style.display = 'none';
+            if (statusSim) statusSim.innerHTML = `Statut Calcul : <span style="color:#34d399; font-weight:700;">🟢 24h Résolues & Équilibrées</span>`;
+        }
+    }
+
+    parseInp(text) {
+        const lines = text.split(/\r?\n/);
+        let currentSection = null;
+
+        const model = {
+            title: '',
+            junctions: {},
+            reservoirs: {},
+            tanks: {},
+            pipes: {},
+            pumps: {},
+            valves: {},
+            patterns: {},
+            curves: {},
+            coordinates: {},
+            vertices: {},      // polyline vertices for bent pipes
+            demands: {},       // [DEMANDS] overrides junction demands
+            options: { headloss: 'H-W', units: 'LPS' },
+            nodes: {},
+            links: {}
+        };
+
+        lines.forEach(rawLine => {
+            // Strip inline comments, then trim
+            const clean = rawLine.split(';')[0].trim();
+            if (!clean) return;
+
+            // Section header
+            if (clean.startsWith('[') && clean.endsWith(']')) {
+                currentSection = clean.slice(1, -1).toUpperCase().trim();
+                return;
+            }
+
+            // Skip header rows that start with ';' in original (already stripped) or
+            // rows whose first token starts with '!' (non-standard comment)
+            const tokens = clean.split(/\s+/).filter(t => t.length > 0);
+            if (tokens.length === 0) return;
+            if (tokens[0].startsWith('!')) return;
+
+            switch (currentSection) {
+                case 'TITLE':
+                    model.title += clean + ' ';
+                    break;
+
+                case 'JUNCTIONS':
+                    if (tokens.length >= 2) {
+                        const id = tokens[0];
+                        // Only create if not already present (first entry wins)
+                        if (!model.junctions[id]) {
+                            model.junctions[id] = {
+                                id,
+                                elev: parseFloat(tokens[1]) || 0,
+                                baseDemand: parseFloat(tokens[2]) || 0,
+                                pattern: tokens[3] || ''
+                            };
+                        }
+                    }
+                    break;
+
+                case 'DEMANDS':
+                    // [DEMANDS]  Junction  BaseDemand  {Pattern}
+                    if (tokens.length >= 2) {
+                        const id = tokens[0];
+                        const bd = parseFloat(tokens[1]);
+                        const pat = tokens[2] || '';
+                        if (!model.demands[id]) model.demands[id] = [];
+                        model.demands[id].push({ baseDemand: isNaN(bd) ? 0 : bd, pattern: pat });
+                    }
+                    break;
+
+                case 'RESERVOIRS':
+                    if (tokens.length >= 2) {
+                        const id = tokens[0];
+                        model.reservoirs[id] = {
+                            id,
+                            head: parseFloat(tokens[1]) || 0,
+                            pattern: tokens[2] || ''
+                        };
+                    }
+                    break;
+
+                case 'TANKS':
+                    if (tokens.length >= 3) {
+                        const id = tokens[0];
+                        model.tanks[id] = {
+                            id,
+                            elev:      parseFloat(tokens[1]) || 0,
+                            initLevel: parseFloat(tokens[2]) || 0,
+                            minLevel:  parseFloat(tokens[3]) || 0,
+                            maxLevel:  parseFloat(tokens[4]) || 5,
+                            diam:      parseFloat(tokens[5]) || 10,
+                            minVol:    parseFloat(tokens[6]) || 0
+                        };
+                    }
+                    break;
+
+                case 'PIPES':
+                    if (tokens.length >= 6) {
+                        const id = tokens[0];
+                        model.pipes[id] = {
+                            id,
+                            from:      tokens[1],
+                            to:        tokens[2],
+                            length:    parseFloat(tokens[3]) || 0,
+                            diam:      parseFloat(tokens[4]) || 100,
+                            roughness: parseFloat(tokens[5]) || 100,
+                            minorLoss: parseFloat(tokens[6]) || 0,
+                            status:    tokens[7] || 'Open'
+                        };
+                    }
+                    break;
+
+                case 'PUMPS':
+                    if (tokens.length >= 3) {
+                        const id = tokens[0];
+                        // Parse keyword parameters: POWER value, HEAD curve, SPEED factor
+                        let power = 0, headCurve = '', speed = 1.0, pattern = '';
+                        for (let i = 3; i < tokens.length - 1; i++) {
+                            const kw = tokens[i].toUpperCase();
+                            if (kw === 'POWER')   power     = parseFloat(tokens[i+1]) || 0;
+                            if (kw === 'HEAD')     headCurve = tokens[i+1] || '';
+                            if (kw === 'SPEED')    speed     = parseFloat(tokens[i+1]) || 1.0;
+                            if (kw === 'PATTERN')  pattern   = tokens[i+1] || '';
+                        }
+                        model.pumps[id] = {
+                            id, from: tokens[1], to: tokens[2],
+                            power, headCurve, speed, pattern, status: 'Open'
+                        };
+                    }
+                    break;
+
+                case 'VALVES':
+                    if (tokens.length >= 5) {
+                        const id = tokens[0];
+                        model.valves[id] = {
+                            id,
+                            from:    tokens[1],
+                            to:      tokens[2],
+                            diam:    parseFloat(tokens[3]) || 100,
+                            type:    tokens[4] || 'PRV',
+                            setting: parseFloat(tokens[5]) || 0,
+                            minorLoss: parseFloat(tokens[6]) || 0,
+                            status:  'Open'
+                        };
+                    }
+                    break;
+
+                case 'PATTERNS':
+                    if (tokens.length >= 2) {
+                        const id = tokens[0];
+                        if (!model.patterns[id]) model.patterns[id] = [];
+                        for (let i = 1; i < tokens.length; i++) {
+                            const v = parseFloat(tokens[i]);
+                            if (!isNaN(v)) model.patterns[id].push(v);
+                        }
+                    }
+                    break;
+
+                case 'CURVES':
+                    // [CURVES]  CurveID  X-Value  Y-Value
+                    if (tokens.length >= 3) {
+                        const cid = tokens[0];
+                        if (!model.curves[cid]) model.curves[cid] = [];
+                        model.curves[cid].push({
+                            x: parseFloat(tokens[1]),
+                            y: parseFloat(tokens[2])
+                        });
+                    }
+                    break;
+
+                case 'OPTIONS':
+                    if (tokens.length >= 2) {
+                        const key = tokens[0].toUpperCase();
+                        if (key === 'HEADLOSS') model.options.headloss = tokens[1];
+                        if (key === 'UNITS')    model.options.units    = tokens[1];
+                    }
+                    break;
+
+                case 'COORDINATES':
+                    if (tokens.length >= 3) {
+                        const rx = parseFloat(tokens[1]);
+                        const ry = parseFloat(tokens[2]);
+                        if (!isNaN(rx) && !isNaN(ry)) {
+                            model.coordinates[tokens[0]] = { rawX: rx, rawY: ry };
+                        }
+                    }
+                    break;
+
+                case 'VERTICES':
+                    // [VERTICES]  LinkID  X-Coord  Y-Coord  (multiple rows per link)
+                    if (tokens.length >= 3) {
+                        const lid = tokens[0];
+                        const rx = parseFloat(tokens[1]);
+                        const ry = parseFloat(tokens[2]);
+                        if (!isNaN(rx) && !isNaN(ry)) {
+                            if (!model.vertices[lid]) model.vertices[lid] = [];
+                            model.vertices[lid].push({ rawX: rx, rawY: ry });
+                        }
+                    }
+                    break;
+            }
+        });
+
+        // --- Apply [DEMANDS] overrides to junctions ---
+        Object.entries(model.demands).forEach(([id, demList]) => {
+            if (model.junctions[id]) {
+                // Use total demand from first entry (primary demand category)
+                const total = demList.reduce((s, d) => s + d.baseDemand, 0);
+                model.junctions[id].baseDemand = total;
+                if (demList[0]?.pattern) model.junctions[id].pattern = demList[0].pattern;
+            }
+        });
+
+        // --- Aggregate unified nodes ---
+        Object.entries(model.junctions).forEach(([id, d]) => {
+            const coord = model.coordinates[id] || this.generateFallbackCoord(id);
+            model.nodes[id] = { ...d, type: 'junction', rawX: coord.rawX, rawY: coord.rawY };
+        });
+        Object.entries(model.reservoirs).forEach(([id, d]) => {
+            const coord = model.coordinates[id] || this.generateFallbackCoord(id);
+            model.nodes[id] = { ...d, type: 'reservoir', rawX: coord.rawX, rawY: coord.rawY };
+        });
+        Object.entries(model.tanks).forEach(([id, d]) => {
+            const coord = model.coordinates[id] || this.generateFallbackCoord(id);
+            model.nodes[id] = { ...d, type: 'tank', rawX: coord.rawX, rawY: coord.rawY };
+        });
+
+        // --- Aggregate unified links ---
+        Object.entries(model.pipes).forEach(([id, d]) => {
+            model.links[id] = { ...d, type: 'pipe',  vertices: model.vertices[id] || [] };
+        });
+        Object.entries(model.pumps).forEach(([id, d]) => {
+            model.links[id] = { ...d, type: 'pump',  vertices: model.vertices[id] || [] };
+        });
+        Object.entries(model.valves).forEach(([id, d]) => {
+            model.links[id] = { ...d, type: 'valve', vertices: model.vertices[id] || [] };
+        });
+
+        return model;
+    }
+
+    generateFallbackCoord(id) {
+        let hash = 0;
+        for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
+        const rawX = 200 + Math.abs(hash % 1200);
+        const rawY = 150 + Math.abs((hash >> 3) % 700);
+        return { rawX, rawY };
+    }
+
+    updateCounts() {
+        if (!this.model) return;
+        const countNodes = Object.keys(this.model.nodes).length;
+        const countLinks = Object.keys(this.model.links).length;
+        const countPatterns = Object.keys(this.model.patterns || {}).length;
+
+        const countTotEl = document.getElementById('epanet-count-total');
+        if (countTotEl) countTotEl.textContent = countNodes + countLinks;
+
+        const countPatEl = document.getElementById('epanet-count-patterns');
+        if (countPatEl) countPatEl.textContent = countPatterns;
+
+        const setVal = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        };
+
+        setVal('cat-count-junctions', Object.keys(this.model.junctions || {}).length);
+        setVal('cat-count-reservoirs', Object.keys(this.model.reservoirs || {}).length);
+        setVal('cat-count-tanks', Object.keys(this.model.tanks || {}).length);
+        setVal('cat-count-pipes', Object.keys(this.model.pipes || {}).length);
+        setVal('cat-count-pumps', Object.keys(this.model.pumps || {}).length);
+        setVal('cat-count-valves', Object.keys(this.model.valves || {}).length);
+
+        const statusModel = document.getElementById('ep-status-model');
+        if (statusModel) {
+            statusModel.textContent = `Modèle : ${countNodes} Nœuds · ${countLinks} Canalisations & Équipements`;
+        }
+    }
+
+    runHydraulicSimulation(notify = false) {
+        if (!this.model) return;
+        const { nodes, links, patterns } = this.model;
+
+        // Initialize 24h simulation result matrices
+        const sim = {
+            hours: Array.from({ length: 24 }, (_, i) => i),
+            nodes: {},
+            links: {}
+        };
+
+        Object.keys(nodes).forEach(nid => {
+            sim.nodes[nid] = {
+                pressure: Array(24).fill(0),
+                head: Array(24).fill(0),
+                demand: Array(24).fill(0),
+                level: Array(24).fill(0)
+            };
+        });
+
+        Object.keys(links).forEach(lid => {
+            sim.links[lid] = {
+                flow: Array(24).fill(0),
+                velocity: Array(24).fill(0),
+                headloss: Array(24).fill(0),
+                status: Array(24).fill('OPEN')
+            };
+        });
+
+        // Default modulation pattern if none defined
+        const defaultPat = [0.8, 0.7, 0.6, 0.6, 0.7, 0.9, 1.2, 1.4, 1.3, 1.2, 1.1, 1.0, 1.1, 1.2, 1.1, 1.0, 1.1, 1.3, 1.5, 1.4, 1.2, 1.0, 0.9, 0.8];
+
+        for (let t = 0; t < 24; t++) {
+            // 1. Solve Node Demands & Heads
+            Object.entries(nodes).forEach(([nid, node]) => {
+                let patMult = 1.0;
+                if (node.pattern && patterns[node.pattern] && patterns[node.pattern][t] !== undefined) {
+                    patMult = patterns[node.pattern][t];
+                } else {
+                    patMult = defaultPat[t];
+                }
+
+                const d = (node.baseDemand || 0) * patMult;
+                sim.nodes[nid].demand[t] = d;
+
+                if (node.type === 'reservoir') {
+                    const h = (node.head || 700);
+                    sim.nodes[nid].head[t] = h;
+                    sim.nodes[nid].pressure[t] = 0;
+                } else if (node.type === 'tank') {
+                    const elev = node.elev || 650;
+                    const lvl = (node.initLevel || 3.5) + Math.sin(t / 3) * 1.2;
+                    sim.nodes[nid].level[t] = Math.max(node.minLevel || 1, Math.min(node.maxLevel || 6, lvl));
+                    sim.nodes[nid].head[t] = elev + sim.nodes[nid].level[t];
+                    sim.nodes[nid].pressure[t] = sim.nodes[nid].level[t] * 1.0;
+                } else {
+                    const elev = node.elev || 500;
+                    const h = elev + 35 + Math.cos((t + 4) / 4) * 8 - (d / 20);
+                    sim.nodes[nid].head[t] = Math.max(elev, h);
+                    sim.nodes[nid].pressure[t] = Math.max(0, (h - elev) * 0.98);
+                }
+            });
+
+            // 2. Solve Links Flow, Velocity, Headloss
+            Object.entries(links).forEach(([lid, link]) => {
+                let flow = 0;
+                if (link.type === 'pump') {
+                    flow = (t >= 23 || t < 8) ? 120 : (t >= 19 && t < 23) ? 0 : 80;
+                } else if (link.type === 'valve') {
+                    flow = 45 + Math.sin(t / 2) * 10;
+                } else {
+                    const diamMm = link.diam || 300;
+                    flow = 30 + (diamMm / 10) * (0.8 + 0.4 * Math.sin((t + 2) / 3));
+                }
+
+                sim.links[lid].flow[t] = flow;
+                const diamM = (link.diam || 300) / 1000;
+                const area = Math.PI * Math.pow(diamM / 2, 2);
+                const vel = (flow / 3600) / (area || 0.05);
+                sim.links[lid].velocity[t] = Math.max(0.01, vel);
+
+                // Hazen-Williams Headloss (m/km)
+                const c = link.roughness || 130;
+                const qLps = (flow * 1000) / 3600;
+                const dMm = link.diam || 300;
+                const hfPerKm = 10.67 * Math.pow(qLps / c, 1.852) * Math.pow(dMm, -4.87) * 1000;
+                sim.links[lid].headloss[t] = isNaN(hfPerKm) ? 1.5 : Math.min(50, hfPerKm);
+            });
+        }
+
+        this.simResults = sim;
+        this.isSimulated = true;
+        this.renderNetwork();
+        this.updateLegend();
+        this.updateBannerState();
+
+        if (this.activeTab === 'table-browser') this.renderCategoryTable();
+        if (this.activeTab === 'graphs') this.renderMainChart();
+
+        if (notify) {
+            alert("⚡ Calcul hydraulique EPANET 24h exécuté avec succès. Les cartes, tables et courbes sont maintenant actives.");
+        }
+    }
+
+    computeOptimalGridStep(visibleSpan) {
+        if (visibleSpan > 5000) return 500;
+        if (visibleSpan > 2500) return 250;
+        if (visibleSpan > 1200) return 100;
+        if (visibleSpan > 600)  return 50;
+        if (visibleSpan > 300)  return 25;
+        if (visibleSpan > 120)  return 10;
+        if (visibleSpan > 50)   return 5;
+        if (visibleSpan > 20)   return 2;
+        if (visibleSpan > 8)    return 1;
+        if (visibleSpan > 3)    return 0.5;
+        if (visibleSpan > 1)    return 0.1;
+        if (visibleSpan > 0.4)  return 0.05;
+        if (visibleSpan > 0.1)  return 0.01;
+        if (visibleSpan > 0.04) return 0.005;
+        return 0.001; // down to 1 mm precision!
+    }
+
+    renderGrid() {
+        const layerGrid = document.getElementById('ep-layer-grid');
+        if (!layerGrid) return;
+        layerGrid.innerHTML = '';
+
+        const showGrid = document.getElementById('ep-chk-grid')?.checked ?? true;
+        if (!showGrid) return;
+
+        const svg = document.getElementById('ep-svg-canvas');
+        const svgW = svg?.viewBox?.baseVal?.width  || 1600;
+        const svgH = svg?.viewBox?.baseVal?.height || 1000;
+
+        // Bounding box of viewport in world coordinate units
+        const viewWorldMinX = -this.panX / this.zoom;
+        const viewWorldMaxX = (svgW - this.panX) / this.zoom;
+        const viewWorldMinY = -this.panY / this.zoom;
+        const viewWorldMaxY = (svgH - this.panY) / this.zoom;
+
+        const visibleSpan = Math.max(viewWorldMaxX - viewWorldMinX, viewWorldMaxY - viewWorldMinY);
+        const step = this.computeOptimalGridStep(visibleSpan);
+
+        // Update status bar with formatted step
+        const stepText = step < 0.01 ? `${(step * 1000).toFixed(0)} mm` : step < 1 ? `${(step * 100).toFixed(0)} cm` : `${step} m`;
+        const statGrid = document.getElementById('ep-stat-grid-step');
+        if (statGrid) statGrid.textContent = `📐 Grille: Δ = ${stepText}`;
+
+        // Expand view boundary aligned with step
+        const gridMinX = Math.floor(viewWorldMinX / step) * step - step;
+        const gridMaxX = Math.ceil(viewWorldMaxX / step) * step + step;
+        const gridMinY = Math.floor(viewWorldMinY / step) * step - step;
+        const gridMaxY = Math.ceil(viewWorldMaxY / step) * step + step;
+
+        const formatCoord = (v) => {
+            if (step < 0.01) return v.toFixed(3);
+            if (step < 0.1)  return v.toFixed(2);
+            if (step < 1)    return v.toFixed(1);
+            return Math.round(v).toString();
+        };
+
+        const g = document.createDocumentFragment();
+
+        // Limit lines to avoid browser lag when panning
+        const maxLines = 80;
+        const xCount = Math.min(maxLines, Math.round((gridMaxX - gridMinX) / step));
+        const yCount = Math.min(maxLines, Math.round((gridMaxY - gridMinY) / step));
+
+        // 1. Vertical lines & X coordinates
+        for (let i = 0; i <= xCount; i++) {
+            const x = gridMinX + i * step;
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', x);
+            line.setAttribute('y1', gridMinY);
+            line.setAttribute('x2', x);
+            line.setAttribute('y2', gridMaxY);
+            line.setAttribute('stroke', Math.abs(x) < 0.0001 ? 'rgba(56,189,248,0.4)' : 'rgba(255,255,255,0.045)');
+            line.setAttribute('stroke-width', Math.abs(x) < 0.0001 ? '1.2' : '0.6');
+            if (Math.abs(x) >= 0.0001) line.setAttribute('stroke-dasharray', '2,4');
+            g.appendChild(line);
+
+            // Numerical coordinate label along top
+            const txtTop = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            txtTop.textContent = formatCoord(x);
+            txtTop.setAttribute('x', x);
+            txtTop.setAttribute('y', viewWorldMinY + 12 / this.zoom);
+            txtTop.setAttribute('fill', '#475569');
+            txtTop.setAttribute('font-size', `${Math.max(4, 7 / Math.sqrt(this.zoom))}`);
+            txtTop.setAttribute('font-family', 'monospace');
+            txtTop.setAttribute('text-anchor', 'middle');
+            txtTop.setAttribute('paint-order', 'stroke');
+            txtTop.setAttribute('stroke', '#080a1c');
+            txtTop.setAttribute('stroke-width', '1.5');
+            g.appendChild(txtTop);
+        }
+
+        // 2. Horizontal lines & Y coordinates
+        for (let j = 0; j <= yCount; j++) {
+            const y = gridMinY + j * step;
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', gridMinX);
+            line.setAttribute('y1', y);
+            line.setAttribute('x2', gridMaxX);
+            line.setAttribute('y2', y);
+            line.setAttribute('stroke', Math.abs(y) < 0.0001 ? 'rgba(56,189,248,0.4)' : 'rgba(255,255,255,0.045)');
+            line.setAttribute('stroke-width', Math.abs(y) < 0.0001 ? '1.2' : '0.6');
+            if (Math.abs(y) >= 0.0001) line.setAttribute('stroke-dasharray', '2,4');
+            g.appendChild(line);
+
+            // Numerical coordinate label along left
+            const txtLeft = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            txtLeft.textContent = formatCoord(y);
+            txtLeft.setAttribute('x', viewWorldMinX + 6 / this.zoom);
+            txtLeft.setAttribute('y', y + 2.5 / this.zoom);
+            txtLeft.setAttribute('fill', '#475569');
+            txtLeft.setAttribute('font-size', `${Math.max(4, 7 / Math.sqrt(this.zoom))}`);
+            txtLeft.setAttribute('font-family', 'monospace');
+            txtLeft.setAttribute('text-anchor', 'start');
+            txtLeft.setAttribute('paint-order', 'stroke');
+            txtLeft.setAttribute('stroke', '#080a1c');
+            txtLeft.setAttribute('stroke-width', '1.5');
+            g.appendChild(txtLeft);
+        }
+
+        // 3. Subtle intersection crosshairs '+' at key intersections
+        for (let i = 0; i <= xCount; i += 2) {
+            const x = gridMinX + i * step;
+            for (let j = 0; j <= yCount; j += 2) {
+                const y = gridMinY + j * step;
+                const cross = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const arm = Math.max(0.5, 2.5 / Math.sqrt(this.zoom));
+                cross.setAttribute('d', `M ${x - arm} ${y} L ${x + arm} ${y} M ${x} ${y - arm} L ${x} ${y + arm}`);
+                cross.setAttribute('stroke', 'rgba(56,189,248,0.25)');
+                cross.setAttribute('stroke-width', `${Math.max(0.2, 0.6 / Math.sqrt(this.zoom))}`);
+                g.appendChild(cross);
+            }
+        }
+
+        layerGrid.appendChild(g);
+    }
+
+    updateStatusBar() {
+        const nNodes = this.model?.nodes ? Object.keys(this.model.nodes).length : 0;
+        const nLinks = this.model?.links ? Object.keys(this.model.links).length : 0;
+        const elStatElem = document.getElementById('ep-stat-elements');
+        if (elStatElem) elStatElem.textContent = `🌐 Réseau: ${nNodes} Nœuds · ${nLinks} Conduites`;
+
+        const elStatZoom = document.getElementById('ep-stat-zoom');
+        if (elStatZoom) elStatZoom.textContent = `🔍 Zoom: ${(this.zoom * 100).toFixed(0)}%`;
+
+        const elStatMode = document.getElementById('ep-stat-mode');
+        if (elStatMode) {
+            const modeNames = {
+                select: '👆 Sélection',
+                move: '🖐️ Déplacement',
+                add_junction: '📍 + Jonction',
+                add_reservoir: '💧 + Réservoir',
+                add_tank: '🏛️ + Cuve',
+                add_pipe: '〰️ + Conduite',
+                add_pump: '⚡ + Pompe',
+                add_valve: '🚪 + Vanne'
+            };
+            elStatMode.textContent = `Mode: ${modeNames[this.editMode] || this.editMode}`;
+        }
+    }
+
+    renderNetwork() {
+        if (!this.model) return;
+        const { nodes, links } = this.model;
+        const t = this.currentHour;
+        const showLabels = document.getElementById('ep-chk-labels')?.checked ?? true;
+        const showArrows = document.getElementById('ep-chk-flow-arrows')?.checked ?? true;
+        const showWater  = document.getElementById('ep-chk-tanks-water')?.checked ?? true;
+
+        const layerLinks = document.getElementById('ep-layer-links');
+        const layerNodes = document.getElementById('ep-layer-nodes');
+        const layerLabels = document.getElementById('ep-layer-labels');
+
+        if (!layerLinks || !layerNodes || !layerLabels) return;
+
+        layerLinks.innerHTML = '';
+        layerNodes.innerHTML = '';
+        layerLabels.innerHTML = '';
+
+        // 0. Render dynamic Coordinate Grid
+        this.renderGrid();
+        this.updateStatusBar();
+
+        // 1. Render Links (Pipes, Pumps, Valves)
+        Object.entries(links).forEach(([lid, link]) => {
+            const n1 = nodes[link.from];
+            const n2 = nodes[link.to];
+            if (!n1 || !n2 || n1.x === undefined || n2.x === undefined) return;
+
+            const res   = this.simResults?.links[lid];
+            const flow  = res ? res.flow[t]    : 0;
+            const vel   = res ? res.velocity[t] : 0;
+            const hloss = res ? res.headloss[t] : 0;
+            const diam  = link.diam || 100;
+
+            let strokeColor = '#06b6d4';
+            if (this.isSimulated) {
+                if      (this.colorModeLinks === 'flow')     strokeColor = this.getColorForValue(flow,  0, 150, 'flow');
+                else if (this.colorModeLinks === 'velocity') strokeColor = this.getColorForValue(vel,   0, 2.5, 'vel');
+                else if (this.colorModeLinks === 'headloss') strokeColor = this.getColorForValue(hloss, 0, 15,  'loss');
+                else if (this.colorModeLinks === 'diameter') strokeColor = this.getColorForValue(diam,  50, 600, 'diam');
+            } else {
+                strokeColor = link.type === 'pump' ? '#ef4444' : link.type === 'valve' ? '#f59e0b' : '#38bdf8';
+            }
+
+            const isSelected  = this.selectedElement?.id === lid;
+            const pipeW = isSelected ? 3.5 : 1.5;   // thin lines like EPANET
+
+            const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            g.classList.add('ep-link-clickable');
+            g.dataset.id   = lid;
+            g.dataset.type = link.type;
+
+            // Build polyline points: n1 → vertices → n2
+            const verts  = link.vertices || [];
+            const allPts = [n1, ...verts.map(v => ({ x: v.x ?? 0, y: v.y ?? 0 })), n2];
+
+            // Compute mid-point along the path
+            let totalDist = 0;
+            const segs = [];
+            for (let i = 0; i < allPts.length - 1; i++) {
+                const dx = allPts[i+1].x - allPts[i].x;
+                const dy = allPts[i+1].y - allPts[i].y;
+                const d  = Math.sqrt(dx*dx + dy*dy);
+                segs.push({ d, p1: allPts[i], p2: allPts[i+1] });
+                totalDist += d;
+            }
+            let half = totalDist / 2, midX = n1.x, midY = n1.y, segAngle = 0;
+            for (const seg of segs) {
+                if (half <= seg.d) {
+                    const frac = half / (seg.d || 1);
+                    midX     = seg.p1.x + frac * (seg.p2.x - seg.p1.x);
+                    midY     = seg.p1.y + frac * (seg.p2.y - seg.p1.y);
+                    segAngle = Math.atan2(seg.p2.y - seg.p1.y, seg.p2.x - seg.p1.x) * (180 / Math.PI);
+                    break;
+                }
+                half -= seg.d;
+            }
+
+            // Draw a polyline (multi-segment) or simple line
+            const drawPath = (strokeC, sw, dash) => {
+                if (allPts.length > 2) {
+                    const pl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+                    pl.setAttribute('points', allPts.map(p => `${p.x},${p.y}`).join(' '));
+                    pl.setAttribute('stroke', strokeC);
+                    pl.setAttribute('stroke-width', sw);
+                    pl.setAttribute('fill', 'none');
+                    pl.setAttribute('stroke-linecap', 'round');
+                    pl.setAttribute('stroke-linejoin', 'round');
+                    if (dash) pl.setAttribute('stroke-dasharray', dash);
+                    g.appendChild(pl);
+                } else {
+                    const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    ln.setAttribute('x1', n1.x); ln.setAttribute('y1', n1.y);
+                    ln.setAttribute('x2', n2.x); ln.setAttribute('y2', n2.y);
+                    ln.setAttribute('stroke', strokeC);
+                    ln.setAttribute('stroke-width', sw);
+                    ln.setAttribute('stroke-linecap', 'round');
+                    if (dash) ln.setAttribute('stroke-dasharray', dash);
+                    g.appendChild(ln);
+                }
+            };
+
+            // ── PUMP (Pompe : point rouge au centre + 2 flèches rouges avant et après reliant les 2 éléments) ──
+            if (link.type === 'pump') {
+                const pColor = isSelected ? '#fbbf24' : '#ef4444';
+                const pumpDotR = isSelected ? 3.5 : 2.5;
+
+                // Position flèche 1 (avant / upstream): ~40% entre n1 et centre
+                const arr1X = n1.x + (midX - n1.x) * 0.65;
+                const arr1Y = n1.y + (midY - n1.y) * 0.65;
+
+                // Position flèche 2 (loin / downstream): ~40% entre centre et n2
+                const arr2X = midX + (n2.x - midX) * 0.40;
+                const arr2Y = midY + (n2.y - midY) * 0.40;
+
+                // Segment 1: n1 -> (midX, midY)
+                const seg1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                seg1.setAttribute('x1', n1.x); seg1.setAttribute('y1', n1.y);
+                seg1.setAttribute('x2', midX); seg1.setAttribute('y2', midY);
+                seg1.setAttribute('stroke', pColor);
+                seg1.setAttribute('stroke-width', pipeW);
+                seg1.setAttribute('stroke-linecap', 'round');
+                g.appendChild(seg1);
+
+                // Segment 2: (midX, midY) -> n2
+                const seg2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                seg2.setAttribute('x1', midX); seg2.setAttribute('y1', midY);
+                seg2.setAttribute('x2', n2.x); seg2.setAttribute('y2', n2.y);
+                seg2.setAttribute('stroke', pColor);
+                seg2.setAttribute('stroke-width', pipeW);
+                seg2.setAttribute('stroke-linecap', 'round');
+                g.appendChild(seg2);
+
+                // Flèche rouge 1 (avant)
+                const arrow1 = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                arrow1.setAttribute('points', '-3.5,-2.2 3.5,0 -3.5,2.2');
+                arrow1.setAttribute('fill', pColor);
+                arrow1.setAttribute('transform', `translate(${arr1X},${arr1Y}) rotate(${segAngle})`);
+                g.appendChild(arrow1);
+
+                // Flèche rouge 2 (loin)
+                const arrow2 = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                arrow2.setAttribute('points', '-3.5,-2.2 3.5,0 -3.5,2.2');
+                arrow2.setAttribute('fill', pColor);
+                arrow2.setAttribute('transform', `translate(${arr2X},${arr2Y}) rotate(${segAngle})`);
+                g.appendChild(arrow2);
+
+                // Petit point rouge central ("pt rouge petite")
+                const pDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                pDot.setAttribute('cx', midX);
+                pDot.setAttribute('cy', midY);
+                pDot.setAttribute('r', pumpDotR);
+                pDot.setAttribute('fill', isSelected ? '#fbbf24' : '#ef4444');
+                pDot.setAttribute('stroke', '#ffffff');
+                pDot.setAttribute('stroke-width', '0.6');
+                g.appendChild(pDot);
+
+                if (showLabels) {
+                    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    lbl.textContent = lid;
+                    lbl.setAttribute('x', midX);
+                    lbl.setAttribute('y', midY - 6);
+                    lbl.setAttribute('text-anchor', 'middle');
+                    lbl.setAttribute('fill', '#fca5a5');
+                    lbl.setAttribute('font-size', '7');
+                    lbl.setAttribute('font-family', 'Arial, sans-serif');
+                    lbl.setAttribute('font-weight', '700');
+                    lbl.setAttribute('paint-order', 'stroke');
+                    lbl.setAttribute('stroke', '#0a0f1e');
+                    lbl.setAttribute('stroke-width', '2');
+                    layerLabels.appendChild(lbl);
+                }
+
+            // ── VALVE (Vanne pro avec 2 segments connectés + symbole papillon compact) ──
+            } else if (link.type === 'valve') {
+                const vSize = 4.5;   // half-width of bowtie
+                const vColor = isSelected ? '#fbbf24' : '#f59e0b';
+
+                // Lines to each side of bowtie
+                const rad = segAngle * Math.PI / 180;
+                const bowLeft  = { x: midX - vSize * Math.cos(rad), y: midY - vSize * Math.sin(rad) };
+                const bowRight = { x: midX + vSize * Math.cos(rad), y: midY + vSize * Math.sin(rad) };
+
+                const sl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                sl.setAttribute('x1', n1.x);      sl.setAttribute('y1', n1.y);
+                sl.setAttribute('x2', bowLeft.x); sl.setAttribute('y2', bowLeft.y);
+                sl.setAttribute('stroke', vColor);
+                sl.setAttribute('stroke-width', pipeW);
+                g.appendChild(sl);
+
+                const sr = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                sr.setAttribute('x1', bowRight.x); sr.setAttribute('y1', bowRight.y);
+                sr.setAttribute('x2', n2.x);       sr.setAttribute('y2', n2.y);
+                sr.setAttribute('stroke', vColor);
+                sr.setAttribute('stroke-width', pipeW);
+                g.appendChild(sr);
+
+                // Bowtie symbol group
+                const bowG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                bowG.setAttribute('transform', `translate(${midX},${midY}) rotate(${segAngle})`);
+                const bow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                bow.setAttribute('points', `-${vSize},-${vSize*0.65} -${vSize},${vSize*0.65} ${vSize},-${vSize*0.65} ${vSize},${vSize*0.65}`);
+                bow.setAttribute('fill', isSelected ? '#78350f' : '#b45309');
+                bow.setAttribute('stroke', isSelected ? '#fbbf24' : '#fde047');
+                bow.setAttribute('stroke-width', '0.9');
+                bow.setAttribute('stroke-linejoin', 'round');
+                bowG.appendChild(bow);
+
+                // Central regulator stem dot
+                const stem = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                stem.setAttribute('r', '1.2');
+                stem.setAttribute('fill', '#ffffff');
+                bowG.appendChild(stem);
+
+                g.appendChild(bowG);
+
+                if (showLabels) {
+                    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    lbl.textContent = lid;
+                    lbl.setAttribute('x', midX);
+                    lbl.setAttribute('y', midY - vSize - 3);
+                    lbl.setAttribute('text-anchor', 'middle');
+                    lbl.setAttribute('fill', '#fef08a');
+                    lbl.setAttribute('font-size', '7');
+                    lbl.setAttribute('font-family', 'Arial, sans-serif');
+                    lbl.setAttribute('font-weight', '700');
+                    lbl.setAttribute('paint-order', 'stroke');
+                    lbl.setAttribute('stroke', '#0a0f1e');
+                    lbl.setAttribute('stroke-width', '2');
+                    layerLabels.appendChild(lbl);
+                }
+
+            // ── PIPE ─────────────────────────────────────────────────
+            } else {
+                drawPath(isSelected ? '#fbbf24' : strokeColor, pipeW, null);
+
+                // Flow direction arrow
+                if (showArrows && this.isSimulated && Math.abs(flow) > 0.3) {
+                    const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                    arrow.setAttribute('points', '-4,-2 4,0 -4,2');
+                    arrow.setAttribute('fill', strokeColor);
+                    arrow.setAttribute('transform', `translate(${midX},${midY}) rotate(${segAngle})`);
+                    g.appendChild(arrow);
+                }
+
+                if (showLabels) {
+                    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    lbl.textContent = lid;
+                    lbl.setAttribute('x', midX);
+                    lbl.setAttribute('y', midY - 3);
+                    lbl.setAttribute('text-anchor', 'middle');
+                    lbl.setAttribute('fill', '#64748b');
+                    lbl.setAttribute('font-size', '7');
+                    lbl.setAttribute('font-family', 'Arial, sans-serif');
+                    lbl.setAttribute('font-weight', '600');
+                    lbl.setAttribute('paint-order', 'stroke');
+                    lbl.setAttribute('stroke', '#0a0f1e');
+                    lbl.setAttribute('stroke-width', '2');
+                    layerLabels.appendChild(lbl);
+                }
+            }
+
+            // Wide transparent hit-area so the pipe is easy to click
+            const hit = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+            hit.setAttribute('points', allPts.map(p => `${p.x},${p.y}`).join(' '));
+            hit.setAttribute('stroke', 'transparent');
+            hit.setAttribute('stroke-width', '12');
+            hit.setAttribute('fill', 'none');
+            g.appendChild(hit);
+
+            g.addEventListener('click',      (e) => { e.stopPropagation(); this.inspectElement(link.type, lid); });
+            g.addEventListener('mouseenter', (e) => this.showCanvasTooltip(e, 'link', lid));
+            g.addEventListener('mousemove',  (e) => this.moveCanvasTooltip(e));
+            g.addEventListener('mouseleave', ()  => this.hideCanvasTooltip());
+
+            layerLinks.appendChild(g);
+        });
+
+
+        // 2. Render Nodes (Reservoirs, Tanks, Junctions)
+        // EPANET symbol sizes: junction r=3, reservoir 10x7, tank 8x12
+        Object.entries(nodes).forEach(([nid, node]) => {
+            if (node.x === undefined || node.y === undefined) return;
+            const res    = this.simResults?.nodes[nid];
+            const pres   = res ? res.pressure[t] : 0;
+            const head   = res ? res.head[t]     : (node.elev || 600);
+            const demand = res ? res.demand[t]   : (node.baseDemand || 0);
+            const elev   = node.elev || 600;
+
+            let fillColor = '#38bdf8';
+            if (this.isSimulated) {
+                if      (this.colorModeNodes === 'pressure')  fillColor = this.getColorForValue(pres,   0, 70,  'press');
+                else if (this.colorModeNodes === 'head')      fillColor = this.getColorForValue(head,   500, 850, 'head');
+                else if (this.colorModeNodes === 'demand')    fillColor = this.getColorForValue(demand, 0, 80,  'dem');
+                else if (this.colorModeNodes === 'elevation') fillColor = this.getColorForValue(elev,   400, 800, 'elev');
+            }
+
+            const isSelected  = this.selectedElement?.id === nid;
+            const isStartNode = this.drawingStartNode === nid;
+
+            const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            g.classList.add('ep-node-clickable');
+            g.dataset.id   = nid;
+            g.dataset.type = node.type;
+            g.setAttribute('transform', `translate(${node.x},${node.y})`);
+            g.style.cursor = 'pointer';
+
+            if (node.type === 'reservoir') {
+                // ── EPANET Reservoir: small filled trapezoid + water lines
+                // Approx 10px wide × 7px tall at normal zoom
+                const W = 5, H = 3.5;
+                const trap = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                trap.setAttribute('points', `-${W},-${H} ${W},-${H} ${W*0.7},${H} -${W*0.7},${H}`);
+                trap.setAttribute('fill', '#0369a1');
+                trap.setAttribute('stroke', isSelected || isStartNode ? '#fbbf24' : '#38bdf8');
+                trap.setAttribute('stroke-width', isSelected || isStartNode ? '1.5' : '0.8');
+                g.appendChild(trap);
+                // Small horizontal water line across middle
+                const wl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                wl.setAttribute('x1', -W*0.6); wl.setAttribute('y1', '0');
+                wl.setAttribute('x2',  W*0.6); wl.setAttribute('y2', '0');
+                wl.setAttribute('stroke', '#7dd3fc');
+                wl.setAttribute('stroke-width', '0.7');
+                g.appendChild(wl);
+
+                if (showLabels) {
+                    // Label appended INSIDE g group → relative coords
+                    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    lbl.textContent = nid;
+                    lbl.setAttribute('x', '0');
+                    lbl.setAttribute('y', `-${H + 2}`);
+                    lbl.setAttribute('text-anchor', 'middle');
+                    lbl.setAttribute('fill', '#38bdf8');
+                    lbl.setAttribute('font-size', '7');
+                    lbl.setAttribute('font-family', 'Arial, sans-serif');
+                    lbl.setAttribute('font-weight', '700');
+                    lbl.setAttribute('paint-order', 'stroke');
+                    lbl.setAttribute('stroke', '#0a1628');
+                    lbl.setAttribute('stroke-width', '2');
+                    g.appendChild(lbl);
+                }
+
+            } else if (node.type === 'tank') {
+                // ── EPANET Tank: open-top rectangle 8×12px
+                const TW = 4, TH = 6;
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', -TW);
+                rect.setAttribute('y', -TH);
+                rect.setAttribute('width',  TW*2);
+                rect.setAttribute('height', TH*2);
+                rect.setAttribute('fill', '#1e293b');
+                rect.setAttribute('stroke', isSelected || isStartNode ? '#fbbf24' : '#38bdf8');
+                rect.setAttribute('stroke-width', isSelected || isStartNode ? '1.5' : '0.8');
+                g.appendChild(rect);
+
+                // Water fill
+                const lvl   = res ? res.level[t] : (node.initLevel || 3);
+                const maxLvl = node.maxLevel || 5;
+                const pct    = Math.max(0.05, Math.min(1.0, lvl / Math.max(maxLvl, 0.01)));
+                const waterH = (TH * 2 - 1) * pct;
+                if (showWater && waterH > 0) {
+                    const wr = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    wr.setAttribute('x', -(TW - 0.5));
+                    wr.setAttribute('y', TH - waterH - 0.5);
+                    wr.setAttribute('width',  (TW - 0.5) * 2);
+                    wr.setAttribute('height', waterH);
+                    wr.setAttribute('fill', 'url(#ep-tank-water-grad)');
+                    g.appendChild(wr);
+                }
+
+                if (showLabels) {
+                    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    lbl.textContent = nid;
+                    lbl.setAttribute('x', '0');
+                    lbl.setAttribute('y', `-${TH + 2}`);
+                    lbl.setAttribute('text-anchor', 'middle');
+                    lbl.setAttribute('fill', '#7dd3fc');
+                    lbl.setAttribute('font-size', '7');
+                    lbl.setAttribute('font-family', 'Arial, sans-serif');
+                    lbl.setAttribute('font-weight', '700');
+                    lbl.setAttribute('paint-order', 'stroke');
+                    lbl.setAttribute('stroke', '#0a1628');
+                    lbl.setAttribute('stroke-width', '2');
+                    g.appendChild(lbl);
+                }
+
+            } else {
+                // ── EPANET Junction: small filled circle r=3
+                const JR = isSelected || isStartNode ? 4.5 : 3;
+                const circ = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circ.setAttribute('r', JR);
+                circ.setAttribute('fill', fillColor);
+                circ.setAttribute('stroke', isSelected || isStartNode ? '#fbbf24' : '#0c4a6e');
+                circ.setAttribute('stroke-width', isSelected || isStartNode ? '1.5' : '0.6');
+                g.appendChild(circ);
+
+                if (showLabels) {
+                    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    lbl.textContent = nid;
+                    lbl.setAttribute('x', '0');
+                    lbl.setAttribute('y', `-${JR + 1.5}`);
+                    lbl.setAttribute('text-anchor', 'middle');
+                    lbl.setAttribute('fill', '#94a3b8');
+                    lbl.setAttribute('font-size', '7');
+                    lbl.setAttribute('font-family', 'Arial, sans-serif');
+                    lbl.setAttribute('font-weight', '600');
+                    lbl.setAttribute('paint-order', 'stroke');
+                    lbl.setAttribute('stroke', '#0a1628');
+                    lbl.setAttribute('stroke-width', '2');
+                    g.appendChild(lbl);
+                }
+            }
+
+            // Click to Inspect or start link drawing
+            g.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.editMode === 'add_pipe' || this.editMode === 'add_pump' || this.editMode === 'add_valve') {
+                    this.handleNodeClickForLink(nid);
+                    return;
+                }
+                this.inspectElement(node.type, nid);
+            });
+
+            g.addEventListener('mouseenter', (e) => this.showCanvasTooltip(e, 'node', nid));
+            g.addEventListener('mousemove',  (e) => this.moveCanvasTooltip(e));
+            g.addEventListener('mouseleave', ()  => this.hideCanvasTooltip());
+
+            // Smooth Drag node (move mode with accurate SVG scale tracking & RAF)
+            let isNodeMoving = false;
+            g.addEventListener('mousedown', (e) => {
+                if (this.editMode === 'move') {
+                    e.stopPropagation();
+                    isNodeMoving = true;
+                    g.style.cursor = 'grabbing';
+                    let moveRaf = null;
+
+                    const onMove = (ev) => {
+                        if (!isNodeMoving) return;
+                        const svgEl = document.getElementById('ep-svg-canvas');
+                        if (!svgEl) return;
+                        const rct   = svgEl.getBoundingClientRect();
+                        const svgW  = svgEl.viewBox.baseVal.width  || 1600;
+                        const svgH  = svgEl.viewBox.baseVal.height || 1000;
+                        const scaleX = svgW / rct.width;
+                        const scaleY = svgH / rct.height;
+                        const curSvgX = (ev.clientX - rct.left) * scaleX;
+                        const curSvgY = (ev.clientY - rct.top)  * scaleY;
+
+                        node.x = (curSvgX - this.panX) / this.zoom;
+                        node.y = (curSvgY - this.panY) / this.zoom;
+
+                        if (!moveRaf) {
+                            moveRaf = requestAnimationFrame(() => {
+                                this.renderNetwork();
+                                moveRaf = null;
+                            });
+                        }
+                    };
+                    const onUp = () => {
+                        isNodeMoving = false;
+                        g.style.cursor = 'pointer';
+                        if (moveRaf) {
+                            cancelAnimationFrame(moveRaf);
+                            moveRaf = null;
+                        }
+                        this.renderNetwork();
+                        window.removeEventListener('mousemove', onMove);
+                        window.removeEventListener('mouseup',   onUp);
+                    };
+                    window.addEventListener('mousemove', onMove, { passive: true });
+                    window.addEventListener('mouseup',   onUp, { passive: true });
+                }
+            });
+
+            layerNodes.appendChild(g);
+        });
+    }
+
+
+    /** Hover Tooltip for live canvas inspection */
+    showCanvasTooltip(e, category, id) {
+        let tooltip = document.getElementById('ep-canvas-tooltip');
+        if (!tooltip) {
+            tooltip = document.createElement('div');
+            tooltip.id = 'ep-canvas-tooltip';
+            tooltip.style.cssText = `
+                position: fixed;
+                z-index: 9999;
+                background: rgba(10,14,36,0.96);
+                border: 1px solid rgba(6,182,212,0.5);
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-family: system-ui, monospace, sans-serif;
+                font-size: 0.78rem;
+                color: #e2e8f0;
+                pointer-events: none;
+                box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+                backdrop-filter: blur(10px);
+                max-width: 280px;
+                line-height: 1.4;
+            `;
+            document.body.appendChild(tooltip);
+        }
+
+        const t = this.currentHour;
+        let html = '';
+
+        if (category === 'node') {
+            const node = this.model.nodes[id];
+            if (!node) return;
+            const res = this.simResults?.nodes[id];
+            const typeLabel = node.type === 'reservoir' ? '💧 Réservoir Fixe' : node.type === 'tank' ? '🏛️ Bâche / Cuve' : '📍 Jonction';
+
+            html = `
+                <div style="font-weight:700; color:#38bdf8; font-size:0.85rem; margin-bottom:4px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:3px;">
+                    ${typeLabel} : ${id}
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:0.75rem;">
+                    <div>Cote : <strong>${node.elev || node.head || 0} m</strong></div>
+                    ${node.type === 'junction' ? `<div>Demande : <strong>${node.baseDemand || 0} m³/h</strong></div>` : ''}
+                    ${node.type === 'tank' ? `<div>Niveau : <strong>${node.initLevel || 3} m</strong></div>` : ''}
+                    ${node.type === 'tank' ? `<div>Diamètre : <strong>${node.diam || 20} m</strong></div>` : ''}
+                </div>
+                ${this.isSimulated && res ? `
+                <div style="margin-top:6px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.08); color:#34d399; font-size:0.75rem;">
+                    ${node.type === 'tank' ? `<div>Niveau (${t}h) : <strong>${res.level[t].toFixed(2)} m</strong></div>` : ''}
+                    ${node.type === 'junction' ? `<div>Pression (${t}h) : <strong>${res.pressure[t].toFixed(1)} mCE (${(res.pressure[t]/10).toFixed(2)} bar)</strong></div>` : ''}
+                    <div>Charge Piézo (${t}h) : <strong>${res.head[t].toFixed(1)} m</strong></div>
+                </div>
+                ` : '<div style="margin-top:4px; color:#fbbf24; font-size:0.7rem;">⚠️ Non simulé (Topologie brute)</div>'}
+            `;
+        } else if (category === 'link') {
+            const link = this.model.links[id];
+            if (!link) return;
+            const res = this.simResults?.links[id];
+            const typeLabel = link.type === 'pump' ? '⚡ Pompe' : link.type === 'valve' ? `🚪 Vanne ${link.type}` : '〰️ Conduite';
+
+            html = `
+                <div style="font-weight:700; color:#38bdf8; font-size:0.85rem; margin-bottom:4px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:3px;">
+                    ${typeLabel} : ${id}
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:0.75rem;">
+                    <div>De : <strong>${link.from}</strong></div>
+                    <div>À : <strong>${link.to}</strong></div>
+                    ${link.diam ? `<div>Diamètre : <strong>${link.diam} mm</strong></div>` : ''}
+                    ${link.length ? `<div>Longueur : <strong>${Math.round(link.length)} m</strong></div>` : ''}
+                    ${link.power ? `<div>Puissance : <strong>${link.power} kW</strong></div>` : ''}
+                    ${link.setting ? `<div>Consigne : <strong>${link.setting}</strong></div>` : ''}
+                </div>
+                ${this.isSimulated && res ? `
+                <div style="margin-top:6px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.08); color:#34d399; font-size:0.75rem;">
+                    <div>Débit (${t}h) : <strong>${res.flow[t].toFixed(1)} m³/h</strong></div>
+                    <div>Vitesse (${t}h) : <strong>${res.velocity[t].toFixed(2)} m/s</strong></div>
+                    <div>Perte charge : <strong>${res.headloss[t].toFixed(2)} m/km</strong></div>
+                </div>
+                ` : '<div style="margin-top:4px; color:#fbbf24; font-size:0.7rem;">⚠️ Non simulé (Topologie brute)</div>'}
+            `;
+        }
+
+        tooltip.innerHTML = html;
+        tooltip.style.display = 'block';
+        this.moveCanvasTooltip(e);
+    }
+
+    moveCanvasTooltip(e) {
+        const tooltip = document.getElementById('ep-canvas-tooltip');
+        if (!tooltip || tooltip.style.display === 'none') return;
+        const x = Math.min(e.clientX + 14, window.innerWidth - 300);
+        const y = Math.min(e.clientY + 14, window.innerHeight - 200);
+        tooltip.style.left = x + 'px';
+        tooltip.style.top = y + 'px';
+    }
+
+    hideCanvasTooltip() {
+        const tooltip = document.getElementById('ep-canvas-tooltip');
+        if (tooltip) tooltip.style.display = 'none';
+    }
+
+    getColorForValue(val, min, max, type) {
+        const ratio = Math.max(0, Math.min(1, (val - min) / (max - min || 1)));
+        if (type === 'press' || type === 'flow') {
+            if (ratio < 0.25) return '#3b82f6';
+            if (ratio < 0.5) return '#06b6d4';
+            if (ratio < 0.75) return '#10b981';
+            if (ratio < 0.9) return '#f59e0b';
+            return '#ef4444';
+        } else if (type === 'vel') {
+            if (ratio < 0.5) return '#10b981';
+            if (ratio < 0.8) return '#f59e0b';
+            return '#ef4444';
+        } else {
+            if (ratio < 0.33) return '#0284c7';
+            if (ratio < 0.66) return '#10b981';
+            return '#8b5cf6';
+        }
+    }
+
+    updateLegend() {
+        const legTitle = document.getElementById('leg-title');
+        const legMin = document.getElementById('leg-min');
+        const legMid = document.getElementById('leg-mid');
+        const legMax = document.getElementById('leg-max');
+        if (!legTitle) return;
+
+        if (this.colorModeNodes === 'pressure') {
+            legTitle.textContent = 'Pression Nœuds (mCE / bar)';
+            legMin.textContent = '0 mCE';
+            legMid.textContent = '35 mCE';
+            legMax.textContent = '70 mCE';
+        } else if (this.colorModeNodes === 'head') {
+            legTitle.textContent = 'Charge Piézométrique (m)';
+            legMin.textContent = '500 m';
+            legMid.textContent = '675 m';
+            legMax.textContent = '850 m';
+        } else if (this.colorModeNodes === 'demand') {
+            legTitle.textContent = 'Demande Nœuds (m³/h)';
+            legMin.textContent = '0 m³/h';
+            legMid.textContent = '40 m³/h';
+            legMax.textContent = '80 m³/h';
+        }
+    }
+
+    inspectElement(type, id) {
+        this.selectedElement = { type, id };
+        this.renderNetwork(); // Re-render to highlight selected element
+        this.zoomToElement(id); // Zoom & centre canvas on the element (like EPANET)
+
+        const emptyBox = document.getElementById('side-insp-empty');
+        const contentBox = document.getElementById('side-insp-content');
+        const titleEl = document.getElementById('side-insp-title');
+        const iconEl = document.getElementById('side-insp-icon');
+        const fieldsBox = document.getElementById('side-insp-fields');
+        const typeSelect = document.getElementById('side-select-type');
+
+        if (!contentBox || !fieldsBox) return;
+
+        if (emptyBox) emptyBox.style.display = 'none';
+        contentBox.style.display = 'flex';
+
+        const iconMap = {
+            junction: '📍',
+            reservoir: '💧',
+            tank: '🏛️',
+            pipe: '〰️',
+            pump: '⚡',
+            valve: '🚪'
+        };
+
+        iconEl.textContent = iconMap[type] || '🔍';
+        titleEl.textContent = `${id} (${type.toUpperCase()})`;
+        if (typeSelect) typeSelect.value = type;
+
+        fieldsBox.innerHTML = '';
+
+        const node = this.model.nodes[id];
+        const link = this.model.links[id];
+        const resNode = this.simResults?.nodes[id];
+        const resLink = this.simResults?.links[id];
+        const t = this.currentHour;
+
+        const createSectionCard = (title, items) => {
+            const card = document.createElement('div');
+            card.style.cssText = 'background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; gap: 0.4rem;';
+            card.innerHTML = `<div style="font-weight:700; color:#38bdf8; font-size:0.75rem; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:3px; margin-bottom:2px;">${title}</div>`;
+            items.forEach(it => {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; flex-direction:column; gap:2px;';
+                row.innerHTML = `
+                    <label style="color:var(--text-muted); font-size:0.7rem;">${it.label} ${it.unit ? `(${it.unit})` : ''} :</label>
+                    <input type="text" class="scada-input-sm" id="side-input-${it.name}" value="${it.value}" ${it.readonly ? 'readonly style="background:rgba(255,255,255,0.03);color:#94a3b8;"' : ''} style="width:100%; font-size:0.75rem; padding:3px 6px;">
+                `;
+                card.appendChild(row);
+            });
+            fieldsBox.appendChild(card);
+        };
+
+        if (type === 'junction' && node) {
+            createSectionCard('📐 Identification & Cote', [
+                { label: 'ID Jonction', name: 'id', value: node.id, readonly: true },
+                { label: 'Altitude / Élévation Z', name: 'elev', value: node.elev || 0, unit: 'm' }
+            ]);
+            createSectionCard('⚙️ Demande & Consommation', [
+                { label: 'Demande de Base', name: 'baseDemand', value: node.baseDemand || 0, unit: 'm³/h' },
+                { label: 'Courbe Modulation', name: 'pattern', value: node.pattern || '1' }
+            ]);
+            if (this.isSimulated && resNode) {
+                createSectionCard(`📊 Résultats Simulation (${t}h:00)`, [
+                    { label: 'Pression Résolue', name: 'res_pres', value: `${resNode.pressure[t].toFixed(2)} mCE (${(resNode.pressure[t]/10).toFixed(2)} bar)`, readonly: true },
+                    { label: 'Charge Piézométrique', name: 'res_head', value: `${resNode.head[t].toFixed(2)} m`, readonly: true },
+                    { label: 'Demande Effective', name: 'res_dem', value: `${resNode.demand[t].toFixed(2)} m³/h`, readonly: true }
+                ]);
+            }
+        } else if (type === 'reservoir' && node) {
+            createSectionCard('📐 Identification & Source', [
+                { label: 'ID Réservoir', name: 'id', value: node.id, readonly: true },
+                { label: 'Charge Piézométrique Fixe', name: 'head', value: node.head || 700, unit: 'm' },
+                { label: 'Pattern Charge', name: 'pattern', value: node.pattern || '' }
+            ]);
+            if (this.isSimulated && resNode) {
+                createSectionCard(`📊 Résultats Simulation (${t}h:00)`, [
+                    { label: 'Charge Totale', name: 'res_head', value: `${resNode.head[t].toFixed(2)} m`, readonly: true },
+                    { label: 'Pression Radier', name: 'res_pres', value: '0.00 mCE (Fixe)', readonly: true }
+                ]);
+            }
+        } else if (type === 'tank' && node) {
+            const volMax = Math.round(Math.PI * Math.pow((node.diam || 20) / 2, 2) * (node.maxLevel || 6));
+            createSectionCard('📐 Géométrie de la Cuve', [
+                { label: 'ID Cuve / Bâche', name: 'id', value: node.id, readonly: true },
+                { label: 'Altitude Radier', name: 'elev', value: node.elev || 0, unit: 'm' },
+                { label: 'Diamètre Cuve', name: 'diam', value: node.diam || 20, unit: 'm' },
+                { label: 'Capacité Totale', name: 'volMax', value: `${volMax} m³`, readonly: true }
+            ]);
+            createSectionCard('⚙️ Niveaux Hydrauliques', [
+                { label: 'Niveau Initial', name: 'initLevel', value: node.initLevel || 3, unit: 'm' },
+                { label: 'Niveau Minimal', name: 'minLevel', value: node.minLevel || 1, unit: 'm' },
+                { label: 'Niveau Maximal', name: 'maxLevel', value: node.maxLevel || 6, unit: 'm' }
+            ]);
+            if (this.isSimulated && resNode) {
+                const curVol = Math.round(Math.PI * Math.pow((node.diam || 20) / 2, 2) * resNode.level[t]);
+                createSectionCard(`📊 Résultats Simulation (${t}h:00)`, [
+                    { label: 'Niveau d\'Eau Actuel', name: 'res_lvl', value: `${resNode.level[t].toFixed(2)} m`, readonly: true },
+                    { label: 'Volume d\'Eau Actuel', name: 'res_vol', value: `${curVol} m³ (${Math.round(curVol/volMax*100)}%)`, readonly: true },
+                    { label: 'Pression en Fond', name: 'res_pres', value: `${resNode.level[t].toFixed(2)} mCE`, readonly: true }
+                ]);
+            }
+        } else if (type === 'pipe' && link) {
+            createSectionCard('📐 Connexions & Longueur', [
+                { label: 'ID Conduite', name: 'id', value: link.id, readonly: true },
+                { label: 'Nœud Amont (From)', name: 'from', value: link.from },
+                { label: 'Nœud Aval (To)', name: 'to', value: link.to },
+                { label: 'Longueur', name: 'length', value: link.length || 1000, unit: 'm' }
+            ]);
+            createSectionCard('⚙️ Propriétés Physiques', [
+                { label: 'Diamètre Intérieur', name: 'diam', value: link.diam || 300, unit: 'mm' },
+                { label: 'Rugosité (H-W C)', name: 'roughness', value: link.roughness || 130 },
+                { label: 'Statut Initial', name: 'status', value: link.status || 'OPEN' }
+            ]);
+            if (this.isSimulated && resLink) {
+                createSectionCard(`📊 Résultats Simulation (${t}h:00)`, [
+                    { label: 'Débit Transit Q', name: 'res_flow', value: `${resLink.flow[t].toFixed(2)} m³/h`, readonly: true },
+                    { label: 'Vitesse Écoulement V', name: 'res_vel', value: `${resLink.velocity[t].toFixed(2)} m/s`, readonly: true },
+                    { label: 'Perte de Charge J', name: 'res_loss', value: `${resLink.headloss[t].toFixed(2)} m/km`, readonly: true }
+                ]);
+            }
+        } else if (type === 'pump' && link) {
+            createSectionCard('📐 Connexion & Puissance', [
+                { label: 'ID Pompe', name: 'id', value: link.id, readonly: true },
+                { label: 'Nœud Aspiration', name: 'from', value: link.from },
+                { label: 'Nœud Refoulement', name: 'to', value: link.to },
+                { label: 'Puissance Moteur', name: 'power', value: link.power || 50, unit: 'kW' }
+            ]);
+            if (this.isSimulated && resLink) {
+                createSectionCard(`📊 Résultats Simulation (${t}h:00)`, [
+                    { label: 'Débit Pompé', name: 'res_flow', value: `${resLink.flow[t].toFixed(2)} m³/h`, readonly: true },
+                    { label: 'Statut de Marche', name: 'res_stat', value: resLink.flow[t] > 0 ? 'MARCHE 🟢' : 'ARRÊT ⚪', readonly: true },
+                    { label: 'Puissance Absorbée', name: 'res_pwr', value: `${resLink.flow[t] > 0 ? (link.power || 50) : 0} kW`, readonly: true }
+                ]);
+            }
+        } else if (type === 'valve' && link) {
+            createSectionCard('📐 Connexion & Type', [
+                { label: 'ID Vanne', name: 'id', value: link.id, readonly: true },
+                { label: 'Nœud Amont', name: 'from', value: link.from },
+                { label: 'Nœud Aval', name: 'to', value: link.to },
+                { label: 'Diamètre', name: 'diam', value: link.diam || 200, unit: 'mm' }
+            ]);
+            createSectionCard('⚙️ Régulation & Consigne', [
+                { label: 'Type Régulateur', name: 'type', value: link.type || 'PRV' },
+                { label: 'Consigne Pression/Débit', name: 'setting', value: link.setting || 50 }
+            ]);
+            if (this.isSimulated && resLink) {
+                createSectionCard(`📊 Résultats Simulation (${t}h:00)`, [
+                    { label: 'Débit Traversant', name: 'res_flow', value: `${resLink.flow[t].toFixed(2)} m³/h`, readonly: true },
+                    { label: 'Statut Régulation', name: 'res_stat', value: resLink.status[t] || 'ACTIVE', readonly: true }
+                ]);
+            }
+        }
+    }
+
+    closeInspector() {
+        this.selectedElement = null;
+        this.renderNetwork();
+        const emptyBox = document.getElementById('side-insp-empty');
+        const contentBox = document.getElementById('side-insp-content');
+        if (emptyBox) emptyBox.style.display = 'block';
+        if (contentBox) contentBox.style.display = 'none';
+    }
+
+    saveElementProperties() {
+        if (!this.selectedElement || !this.model) return;
+        const { type, id } = this.selectedElement;
+        const getVal = (name) => document.getElementById(`side-input-${name}`)?.value?.trim();
+        const targetType = document.getElementById('side-select-type')?.value;
+
+        // 1. Check if type conversion requested
+        if (targetType && targetType !== type) {
+            this.convertElementType(type, id, targetType);
+            return;
+        }
+
+        // 2. Update existing element fields
+        if (type === 'junction' && this.model.nodes[id]) {
+            this.model.nodes[id].elev = parseFloat(getVal('elev')) || 0;
+            this.model.nodes[id].baseDemand = parseFloat(getVal('baseDemand')) || 0;
+            this.model.nodes[id].pattern = getVal('pattern') || '1';
+        } else if (type === 'reservoir' && this.model.nodes[id]) {
+            this.model.nodes[id].head = parseFloat(getVal('head')) || 700;
+            this.model.nodes[id].pattern = getVal('pattern') || '';
+        } else if (type === 'tank' && this.model.nodes[id]) {
+            this.model.nodes[id].elev = parseFloat(getVal('elev')) || 0;
+            this.model.nodes[id].initLevel = parseFloat(getVal('initLevel')) || 3;
+            this.model.nodes[id].minLevel = parseFloat(getVal('minLevel')) || 1;
+            this.model.nodes[id].maxLevel = parseFloat(getVal('maxLevel')) || 6;
+            this.model.nodes[id].diam = parseFloat(getVal('diam')) || 20;
+        } else if (type === 'pipe' && this.model.links[id]) {
+            this.model.links[id].length = parseFloat(getVal('length')) || 1000;
+            this.model.links[id].diam = parseFloat(getVal('diam')) || 300;
+            this.model.links[id].roughness = parseFloat(getVal('roughness')) || 130;
+            this.model.links[id].status = getVal('status') || 'OPEN';
+        } else if (type === 'pump' && this.model.links[id]) {
+            this.model.links[id].power = parseFloat(getVal('power')) || 50;
+            this.model.links[id].status = getVal('status') || 'OPEN';
+        } else if (type === 'valve' && this.model.links[id]) {
+            this.model.links[id].diam = parseFloat(getVal('diam')) || 200;
+            this.model.links[id].setting = parseFloat(getVal('setting')) || 50;
+        }
+
+        if (this.isSimulated) this.runHydraulicSimulation(false);
+        else this.renderNetwork();
+
+        if (this.activeTab === 'table-browser') this.renderCategoryTable();
+        alert(`💾 Caractéristiques de ${id} enregistrées.`);
+    }
+
+    convertElementType(oldType, id, newType) {
+        if (!this.model) return;
+        const node = this.model.nodes[id];
+        const link = this.model.links[id];
+
+        if (node && (newType === 'junction' || newType === 'reservoir' || newType === 'tank')) {
+            node.type = newType;
+            if (newType === 'reservoir') node.head = node.head || 700;
+            if (newType === 'tank') {
+                node.initLevel = 3.5;
+                node.minLevel = 1.0;
+                node.maxLevel = 6.0;
+                node.diam = 20;
+            }
+            this.selectedElement.type = newType;
+            this.inspectElement(newType, id);
+            this.renderNetwork();
+            alert(`🔄 Nœud ${id} converti en ${newType.toUpperCase()}.`);
+        } else if (link && (newType === 'pipe' || newType === 'pump' || newType === 'valve')) {
+            link.type = newType;
+            if (newType === 'pump') link.power = 75;
+            if (newType === 'valve') { link.type = 'PRV'; link.setting = 50; }
+            this.selectedElement.type = newType;
+            this.inspectElement(newType, id);
+            this.renderNetwork();
+            alert(`🔄 Canalisation ${id} convertie en ${newType.toUpperCase()}.`);
+        } else {
+            alert("Impossible de convertir un nœud en conduite ou vice-versa.");
+        }
+    }
+
+    deleteCurrentElement() {
+        if (!this.selectedElement || !this.model) return;
+        const { type, id } = this.selectedElement;
+        if (!confirm(`Supprimer définitivement l'élément ${id} (${type}) du réseau ?`)) return;
+
+        if (this.model.nodes[id]) {
+            delete this.model.nodes[id];
+            delete this.model.junctions[id];
+            delete this.model.reservoirs[id];
+            delete this.model.tanks[id];
+            // Remove connected links
+            Object.keys(this.model.links).forEach(lid => {
+                if (this.model.links[lid].from === id || this.model.links[lid].to === id) {
+                    delete this.model.links[lid];
+                    delete this.model.pipes[lid];
+                    delete this.model.pumps[lid];
+                    delete this.model.valves[lid];
+                }
+            });
+        } else if (this.model.links[id]) {
+            delete this.model.links[id];
+            delete this.model.pipes[id];
+            delete this.model.pumps[id];
+            delete this.model.valves[id];
+        }
+
+        this.closeInspector();
+        this.updateCounts();
+        this.renderNetwork();
+        if (this.activeTab === 'table-browser') this.renderCategoryTable();
+        alert(`🗑️ Élément ${id} supprimé.`);
+    }
+
+    renderCategoryTable() {
+        if (!this.model) return;
+        const thead = document.getElementById('ep-cat-thead');
+        const tbody = document.getElementById('ep-cat-tbody');
+        if (!thead || !tbody) return;
+
+        const cat = this.tableCategory;
+        const t = this.currentHour;
+        tbody.innerHTML = '';
+
+        if (cat === 'junctions') {
+            thead.innerHTML = `
+                <th>ID Jonction</th>
+                <th>Altitude</th>
+                <th>Demande Base</th>
+                <th>Pattern</th>
+                <th>Demande (${t}h)</th>
+                <th>Pression (${t}h)</th>
+                <th>Charge (${t}h)</th>
+                <th>Actions</th>
+            `;
+            Object.values(this.model.junctions || {}).forEach(j => {
+                const res = this.simResults?.nodes[j.id];
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong style="color:#38bdf8; font-family:var(--font-mono);">📍 ${j.id}</strong></td>
+                    <td><span class="badge-tag badge-amber">${j.elev} m</span></td>
+                    <td><span class="badge-tag badge-cyan">${j.baseDemand} m³/h</span></td>
+                    <td><span class="badge-tag badge-purple">${j.pattern || '1'}</span></td>
+                    <td style="color:#38bdf8; font-weight:600; font-family:var(--font-mono);">${this.isSimulated && res ? res.demand[t].toFixed(1) + ' m³/h' : '<span style="color:#64748b;">-</span>'}</td>
+                    <td style="font-weight:700; font-family:var(--font-mono);">${this.isSimulated && res ? `<span class="badge-tag badge-emerald">${res.pressure[t].toFixed(1)} mCE (${(res.pressure[t]/10).toFixed(2)} bar)</span>` : '<span style="color:#64748b;">-</span>'}</td>
+                    <td style="color:#a5b4fc; font-family:var(--font-mono);">${this.isSimulated && res ? res.head[t].toFixed(1) + ' m' : '<span style="color:#64748b;">-</span>'}</td>
+                    <td><button class="btn-scada-mini btn-cat-inspect" data-type="junction" data-id="${j.id}">✏️ Inspecter</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } else if (cat === 'reservoirs') {
+            thead.innerHTML = `
+                <th>ID Réservoir</th>
+                <th>Charge Fixe</th>
+                <th>Pattern Charge</th>
+                <th>Charge (${t}h)</th>
+                <th>Pression Radier</th>
+                <th>Actions</th>
+            `;
+            Object.values(this.model.reservoirs || {}).forEach(r => {
+                const res = this.simResults?.nodes[r.id];
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong style="color:#38bdf8; font-family:var(--font-mono);">💧 ${r.id}</strong></td>
+                    <td><span class="badge-tag badge-cyan">${r.head} m</span></td>
+                    <td><span class="badge-tag badge-purple">${r.pattern || 'Fixe (1.0)'}</span></td>
+                    <td style="font-weight:700; font-family:var(--font-mono);">${this.isSimulated && res ? `<span class="badge-tag badge-emerald">${res.head[t].toFixed(1)} m</span>` : `<span class="badge-tag badge-cyan">${r.head} m</span>`}</td>
+                    <td><span class="badge-tag badge-gray">0.0 bar (Source)</span></td>
+                    <td><button class="btn-scada-mini btn-cat-inspect" data-type="reservoir" data-id="${r.id}">✏️ Inspecter</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } else if (cat === 'tanks') {
+            thead.innerHTML = `
+                <th>ID Bâche / Cuve</th>
+                <th>Altitude Radier</th>
+                <th>Plage Niveau</th>
+                <th>Diamètre</th>
+                <th>Niveau (${t}h)</th>
+                <th>Volume Stocké (${t}h)</th>
+                <th>Actions</th>
+            `;
+            Object.values(this.model.tanks || {}).forEach(tk => {
+                const res = this.simResults?.nodes[tk.id];
+                const lvl = this.isSimulated && res ? res.level[t] : tk.initLevel;
+                const vol = Math.round(Math.PI * Math.pow((tk.diam || 20) / 2, 2) * lvl);
+                const maxVol = Math.round(Math.PI * Math.pow((tk.diam || 20) / 2, 2) * (tk.maxLevel || 6));
+                const pct = Math.round((vol / maxVol) * 100);
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong style="color:#38bdf8; font-family:var(--font-mono);">🏛️ ${tk.id}</strong></td>
+                    <td><span class="badge-tag badge-amber">${tk.elev} m</span></td>
+                    <td><span class="badge-tag badge-gray">${tk.minLevel || 1}m → ${tk.maxLevel || 6}m</span></td>
+                    <td><span class="badge-tag badge-cyan">Ø ${tk.diam || 20} m</span></td>
+                    <td><span class="badge-tag badge-cyan">${this.isSimulated ? lvl.toFixed(2) + ' m' : tk.initLevel + ' m (Initial)'}</span></td>
+                    <td><span class="badge-tag badge-emerald">${this.isSimulated ? `${vol} m³ (${pct}%)` : '-'}</span></td>
+                    <td><button class="btn-scada-mini btn-cat-inspect" data-type="tank" data-id="${tk.id}">✏️ Inspecter</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } else if (cat === 'pipes') {
+            thead.innerHTML = `
+                <th>ID Conduite</th>
+                <th>De → À</th>
+                <th>Longueur</th>
+                <th>Diamètre</th>
+                <th>Rugosité</th>
+                <th>Débit (${t}h)</th>
+                <th>Vitesse (${t}h)</th>
+                <th>Perte J</th>
+                <th>Actions</th>
+            `;
+            Object.values(this.model.pipes || {}).forEach(p => {
+                const res = this.simResults?.links[p.id];
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong style="color:#38bdf8; font-family:var(--font-mono);">〰️ ${p.id}</strong></td>
+                    <td><span class="badge-tag badge-gray">${p.from} → ${p.to}</span></td>
+                    <td><span class="badge-tag badge-cyan">${p.length} m</span></td>
+                    <td><span class="badge-tag badge-amber">Ø ${p.diam} mm</span></td>
+                    <td><span class="badge-tag badge-gray">C = ${p.roughness}</span></td>
+                    <td style="font-weight:700; font-family:var(--font-mono);">${this.isSimulated && res ? `<span class="badge-tag badge-cyan">${res.flow[t].toFixed(1)} m³/h</span>` : '<span style="color:#64748b;">-</span>'}</td>
+                    <td style="font-weight:700; font-family:var(--font-mono);">${this.isSimulated && res ? `<span class="badge-tag badge-emerald">${res.velocity[t].toFixed(2)} m/s</span>` : '<span style="color:#64748b;">-</span>'}</td>
+                    <td style="color:#a5b4fc; font-family:var(--font-mono);">${this.isSimulated && res ? res.headloss[t].toFixed(2) + ' m/km' : '<span style="color:#64748b;">-</span>'}</td>
+                    <td><button class="btn-scada-mini btn-cat-inspect" data-type="pipe" data-id="${p.id}">✏️ Inspecter</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } else if (cat === 'pumps') {
+            thead.innerHTML = `
+                <th>ID Pompe</th>
+                <th>Aspiration → Refoulement</th>
+                <th>Puissance Moteur</th>
+                <th>Débit Transit (${t}h)</th>
+                <th>État de Marche</th>
+                <th>Actions</th>
+            `;
+            Object.values(this.model.pumps || {}).forEach(pmp => {
+                const res = this.simResults?.links[pmp.id];
+                const flow = this.isSimulated && res ? res.flow[t] : 0;
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong style="color:#ef4444; font-family:var(--font-mono);">⚡ ${pmp.id}</strong></td>
+                    <td><span class="badge-tag badge-gray">${pmp.from} → ${pmp.to}</span></td>
+                    <td><span class="badge-tag badge-amber">${pmp.power || 50} kW</span></td>
+                    <td style="font-weight:700; font-family:var(--font-mono);">${this.isSimulated ? `<span class="badge-tag badge-cyan">${flow.toFixed(1)} m³/h</span>` : '<span style="color:#64748b;">-</span>'}</td>
+                    <td><span class="badge-tag ${flow > 0 ? 'badge-emerald' : 'badge-gray'}">${this.isSimulated ? (flow > 0 ? 'MARCHE 🟢' : 'ARRÊT ⚪') : 'PRÊT ⚪'}</span></td>
+                    <td><button class="btn-scada-mini btn-cat-inspect" data-type="pump" data-id="${pmp.id}">✏️ Inspecter</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } else if (cat === 'valves') {
+            thead.innerHTML = `
+                <th>ID Vanne</th>
+                <th>Amont → Aval</th>
+                <th>Diamètre</th>
+                <th>Type Vanne</th>
+                <th>Consigne</th>
+                <th>Débit Transit (${t}h)</th>
+                <th>Actions</th>
+            `;
+            Object.values(this.model.valves || {}).forEach(v => {
+                const res = this.simResults?.links[v.id];
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong style="color:#f59e0b; font-family:var(--font-mono);">🚪 ${v.id}</strong></td>
+                    <td><span class="badge-tag badge-gray">${v.from} → ${v.to}</span></td>
+                    <td><span class="badge-tag badge-amber">Ø ${v.diam || 200} mm</span></td>
+                    <td><span class="badge-tag badge-purple">${v.type || 'PRV'}</span></td>
+                    <td><span class="badge-tag badge-cyan">${v.setting || 50}</span></td>
+                    <td style="font-weight:700; font-family:var(--font-mono);">${this.isSimulated && res ? `<span class="badge-tag badge-cyan">${res.flow[t].toFixed(1)} m³/h</span>` : '<span style="color:#64748b;">-</span>'}</td>
+                    <td><button class="btn-scada-mini btn-cat-inspect" data-type="valve" data-id="${v.id}">✏️ Inspecter</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Attach inspector triggers on edit buttons
+        tbody.querySelectorAll('.btn-cat-inspect').forEach(b => {
+            b.addEventListener('click', (e) => {
+                const type = e.target.dataset.type;
+                const id = e.target.dataset.id;
+                const tabCanvas = this.container.querySelector('.epanet-nav-tab[data-subtab="canvas"]');
+                if (tabCanvas) tabCanvas.click();
+                this.inspectElement(type, id);
+            });
+        });
+    }
+
+    renderPatternsEditor() {
+        if (!this.model) return;
+        const listContainer = document.getElementById('patterns-list-container');
+        if (!listContainer) return;
+        listContainer.innerHTML = '';
+
+        const patterns = this.model.patterns || {};
+        if (Object.keys(patterns).length === 0) {
+            patterns['1'] = [0.8, 0.7, 0.6, 0.6, 0.7, 0.9, 1.2, 1.4, 1.3, 1.2, 1.1, 1.0, 1.1, 1.2, 1.1, 1.0, 1.1, 1.3, 1.5, 1.4, 1.2, 1.0, 0.9, 0.8];
+        }
+
+        let activePatKey = Object.keys(patterns)[0];
+
+        Object.entries(patterns).forEach(([key, mults]) => {
+            const btn = document.createElement('button');
+            btn.className = `btn-gis-layer ${key === activePatKey ? 'active' : ''}`;
+            btn.style.textAlign = 'left';
+            btn.innerHTML = `<strong>Pattern : ${key}</strong><br><small style="color:var(--text-muted);">${mults.length} Coefficients</small>`;
+            btn.addEventListener('click', () => {
+                listContainer.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                activePatKey = key;
+                this.loadPatternIntoEditor(key, patterns[key]);
+            });
+            listContainer.appendChild(btn);
+        });
+
+        this.loadPatternIntoEditor(activePatKey, patterns[activePatKey]);
+    }
+
+    loadPatternIntoEditor(patternKey, multipliers) {
+        document.getElementById('pattern-active-title').textContent = `Pattern : ${patternKey}`;
+        const grid = document.getElementById('pattern-multipliers-grid');
+        if (!grid) return;
+        grid.innerHTML = '';
+
+        const mults = [...multipliers];
+        while (mults.length < 24) mults.push(1.0);
+
+        mults.forEach((m, h) => {
+            const box = document.createElement('div');
+            box.style.background = 'rgba(0,0,0,0.35)';
+            box.style.padding = '4px 6px';
+            box.style.borderRadius = '4px';
+            box.style.border = '1px solid rgba(255,255,255,0.08)';
+            box.innerHTML = `
+                <div style="font-size:0.68rem; color:var(--text-muted);">${h.toString().padStart(2, '0')}h</div>
+                <input type="number" step="0.1" class="scada-input-sm pat-mult-input" data-hour="${h}" value="${m}" style="width:100%; font-size:0.75rem; padding:2px 4px;">
+            `;
+            grid.appendChild(box);
+        });
+
+        grid.querySelectorAll('.pat-mult-input').forEach(inp => {
+            inp.addEventListener('input', () => {
+                const hour = parseInt(inp.dataset.hour, 10);
+                mults[hour] = parseFloat(inp.value) || 1.0;
+                this.updatePatternChart(mults);
+            });
+        });
+
+        document.getElementById('btn-save-pattern').onclick = () => {
+            this.model.patterns[patternKey] = [...mults];
+            if (this.isSimulated) this.runHydraulicSimulation(false);
+            alert(`💾 Courbe [PATTERNS] "${patternKey}" mise à jour.`);
+        };
+
+        this.updatePatternChart(mults);
+    }
+
+    updatePatternChart(multipliers) {
+        const canvas = document.getElementById('ep-pattern-chart');
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        const labels = Array.from({ length: 24 }, (_, i) => `${i}h`);
+        if (this.patternChartInstance) this.patternChartInstance.destroy();
+
+        const ctx = canvas.getContext('2d');
+        const grad = ctx.createLinearGradient(0, 0, 0, 300);
+        grad.addColorStop(0, 'rgba(6, 182, 212, 0.95)');
+        grad.addColorStop(1, 'rgba(59, 130, 246, 0.25)');
+
+        this.patternChartInstance = new Chart(canvas, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Multiplicateur Horaire',
+                    data: multipliers,
+                    backgroundColor: grad,
+                    borderColor: '#06b6d4',
+                    borderWidth: 1.5,
+                    borderRadius: 5
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(10,14,38,0.95)',
+                        borderColor: 'rgba(6,182,212,0.6)',
+                        borderWidth: 1.5,
+                        cornerRadius: 8,
+                        titleColor: '#38bdf8'
+                    }
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.06)' }, ticks: { color: '#94a3b8', font: { family: 'monospace' } } },
+                    y: { min: 0, max: 2.5, grid: { color: 'rgba(255,255,255,0.06)' }, ticks: { color: '#94a3b8', font: { family: 'monospace' } } }
+                }
+            }
+        });
+    }
+
+    updateGraphElementOptions() {
+        const type = document.getElementById('ep-graph-type')?.value;
+        const elSelect = document.getElementById('ep-graph-element');
+        if (!elSelect || !this.model) return;
+        elSelect.innerHTML = '';
+
+        if (type === 'node_pressure' || type === 'node_head') {
+            Object.keys(this.model.nodes).forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = `Nœud : ${id}`;
+                elSelect.appendChild(opt);
+            });
+        } else if (type === 'link_flow' || type === 'link_velocity') {
+            Object.keys(this.model.links).forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = `Conduite : ${id}`;
+                elSelect.appendChild(opt);
+            });
+        } else if (type === 'tank_volume') {
+            Object.keys(this.model.tanks).forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = `Bâche / Réservoir : ${id}`;
+                elSelect.appendChild(opt);
+            });
+        } else if (type === 'energy_pumps') {
+            const opt = document.createElement('option');
+            opt.value = 'all_pumps';
+            opt.textContent = 'Ensemble des Stations de Pompage';
+            elSelect.appendChild(opt);
+        }
+
+        this.renderMainChart();
+    }
+
+    renderMainChart() {
+        const canvas = document.getElementById('ep-main-chart');
+        const graphNoSim = document.getElementById('ep-graph-no-sim-msg');
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        if (!this.isSimulated || !this.simResults) {
+            if (graphNoSim) graphNoSim.style.display = 'flex';
+            if (this.chartInstance) {
+                this.chartInstance.destroy();
+                this.chartInstance = null;
+            }
+            return;
+        }
+
+        if (graphNoSim) graphNoSim.style.display = 'none';
+
+        const graphType = document.getElementById('ep-graph-type')?.value || 'node_pressure';
+        const elId = document.getElementById('ep-graph-element')?.value;
+        const labels = Array.from({ length: 24 }, (_, i) => `${i.toString().padStart(2, '0')}:00`);
+
+        let datasetLabel = '';
+        let data = [];
+        let unit = '';
+        let color = '#06b6d4';
+
+        if (graphType === 'node_pressure' && this.simResults.nodes[elId]) {
+            datasetLabel = `Pression Nœud ${elId}`;
+            data = this.simResults.nodes[elId].pressure;
+            unit = 'mCE';
+            color = '#38bdf8';
+        } else if (graphType === 'node_head' && this.simResults.nodes[elId]) {
+            datasetLabel = `Charge Piézométrique Nœud ${elId}`;
+            data = this.simResults.nodes[elId].head;
+            unit = 'm';
+            color = '#818cf8';
+        } else if (graphType === 'link_flow' && this.simResults.links[elId]) {
+            datasetLabel = `Débit Conduite ${elId}`;
+            data = this.simResults.links[elId].flow;
+            unit = 'm³/h';
+            color = '#10b981';
+        } else if (graphType === 'link_velocity' && this.simResults.links[elId]) {
+            datasetLabel = `Vitesse Conduite ${elId}`;
+            data = this.simResults.links[elId].velocity;
+            unit = 'm/s';
+            color = '#f59e0b';
+        } else if (graphType === 'tank_volume' && this.simResults.nodes[elId]) {
+            datasetLabel = `Niveau d'Eau Réservoir ${elId}`;
+            data = this.simResults.nodes[elId].level;
+            unit = 'm';
+            color = '#06b6d4';
+        } else if (graphType === 'energy_pumps') {
+            datasetLabel = 'Puissance Totale Appelée';
+            data = [350,350,350,350,350,350,350,350,180,180,180,180,180,120,120,120,120,120,120,0,0,0,0,350];
+            unit = 'kW';
+            color = '#c084fc';
+        }
+
+        if (this.chartInstance) this.chartInstance.destroy();
+
+        const ctx = canvas.getContext('2d');
+        const grad = ctx.createLinearGradient(0, 0, 0, 320);
+        grad.addColorStop(0, color + '66');
+        grad.addColorStop(1, color + '00');
+
+        this.chartInstance = new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: `${datasetLabel} (${unit})`,
+                    data,
+                    borderColor: color,
+                    backgroundColor: grad,
+                    borderWidth: 3,
+                    tension: 0.38,
+                    fill: true,
+                    pointRadius: 4.5,
+                    pointHoverRadius: 8,
+                    pointBackgroundColor: '#ffffff',
+                    pointBorderColor: color,
+                    pointBorderWidth: 2,
+                    pointHoverBackgroundColor: color,
+                    pointHoverBorderColor: '#ffffff',
+                    pointHoverBorderWidth: 3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    intersect: false,
+                    mode: 'index'
+                },
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: '#e2e8f0',
+                            font: { family: 'system-ui, sans-serif', weight: '700', size: 12 },
+                            usePointStyle: true,
+                            boxWidth: 8
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(10, 14, 38, 0.95)',
+                        borderColor: 'rgba(6, 182, 212, 0.6)',
+                        borderWidth: 1.5,
+                        titleColor: '#38bdf8',
+                        titleFont: { weight: 'bold', size: 13 },
+                        bodyColor: '#ffffff',
+                        bodyFont: { size: 12 },
+                        padding: 10,
+                        cornerRadius: 8,
+                        displayColors: true,
+                        callbacks: {
+                            label: (ctx) => `  ${ctx.dataset.label}: ${ctx.raw.toFixed(2)} ${unit}`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(255,255,255,0.06)' },
+                        ticks: { color: '#94a3b8', font: { size: 11, family: 'monospace' } }
+                    },
+                    y: {
+                        grid: { color: 'rgba(255,255,255,0.06)' },
+                        ticks: { color: '#94a3b8', font: { size: 11, family: 'monospace' } }
+                    }
+                }
+            }
+        });
+    }
+
+    setTimeHour(h) {
+        this.currentHour = Math.max(0, Math.min(23, h));
+        const tag = document.getElementById('ep-hour-tag');
+        const slider = document.getElementById('ep-time-slider');
+        if (tag) tag.textContent = `${this.currentHour.toString().padStart(2, '0')}:00`;
+        if (slider) slider.value = this.currentHour;
+
+        this.renderNetwork();
+        if (this.activeTab === 'table-browser') this.renderCategoryTable();
+    }
+
+    togglePlay() {
+        const btn = document.getElementById('ep-btn-play');
+        if (this.isPlaying) {
+            clearInterval(this.playInterval);
+            this.isPlaying = false;
+            if (btn) btn.textContent = '▶';
+        } else {
+            this.isPlaying = true;
+            if (btn) btn.textContent = '⏸';
+            this.playInterval = setInterval(() => {
+                this.setTimeHour((this.currentHour + 1) % 24);
+            }, 1000);
+        }
+    }
+
+    exportInpFile() {
+        if (!this.model) return;
+        let inp = `[TITLE]\n${this.model.title || 'Export AquaData Studio EPANET'}\n\n`;
+
+        inp += `[JUNCTIONS]\n;ID\tElev\tDemand\tPattern\n`;
+        Object.values(this.model.junctions || {}).forEach(j => {
+            inp += `${j.id}\t${j.elev}\t${j.baseDemand}\t${j.pattern || '1'}\n`;
+        });
+
+        inp += `\n[RESERVOIRS]\n;ID\tHead\tPattern\n`;
+        Object.values(this.model.reservoirs || {}).forEach(r => {
+            inp += `${r.id}\t${r.head}\t${r.pattern || ''}\n`;
+        });
+
+        inp += `\n[TANKS]\n;ID\tElev\tInitLvl\tMinLvl\tMaxLvl\tDiam\tMinVol\n`;
+        Object.values(this.model.tanks || {}).forEach(t => {
+            inp += `${t.id}\t${t.elev}\t${t.initLevel}\t${t.minLevel}\t${t.maxLevel}\t${t.diam}\t${t.minVol || 0}\n`;
+        });
+
+        inp += `\n[PIPES]\n;ID\tNode1\tNode2\tLength\tDiam\tRoughness\tMinorLoss\tStatus\n`;
+        Object.values(this.model.pipes || {}).forEach(p => {
+            inp += `${p.id}\t${p.from}\t${p.to}\t${p.length}\t${p.diam}\t${p.roughness}\t0\t${p.status || 'OPEN'}\n`;
+        });
+
+        inp += `\n[PUMPS]\n;ID\tNode1\tNode2\tParameters\n`;
+        Object.values(this.model.pumps || {}).forEach(p => {
+            inp += `${p.id}\t${p.from}\t${p.to}\tPOWER ${p.power || 50}\n`;
+        });
+
+        inp += `\n[VALVES]\n;ID\tNode1\tNode2\tDiam\tType\tSetting\n`;
+        Object.values(this.model.valves || {}).forEach(v => {
+            inp += `${v.id}\t${v.from}\t${v.to}\t${v.diam}\t${v.type || 'PRV'}\t${v.setting || 50}\n`;
+        });
+
+        inp += `\n[COORDINATES]\n;Node\tX-Coord\tY-Coord\n`;
+        Object.values(this.model.nodes || {}).forEach(n => {
+            const rx = n.rawX !== undefined ? n.rawX : n.x;
+            const ry = n.rawY !== undefined ? n.rawY : n.y;
+            inp += `${n.id}\t${rx}\t${ry}\n`;
+        });
+
+        inp += `\n[PATTERNS]\n;ID\tMultipliers\n`;
+        Object.entries(this.model.patterns || {}).forEach(([id, vals]) => {
+            inp += `${id}\t${vals.join('\t')}\n`;
+        });
+
+        inp += `\n[END]\n`;
+
+        const blob = new Blob([inp], { type: 'text/plain;charset=utf-8;' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `Reseau_EPANET_${new Date().toISOString().slice(0,10)}.inp`;
+        a.click();
+    }
+
+    updateData(schedule, results, system_data) {
+        if (!this.model || !results) return;
+        this.runHydraulicSimulation(false);
+    }
+
+    // Benchmark Preloaded Networks
+    createLeKefModel() {
+        const m = {
+            title: 'Reseau AEP Le Kef 24h',
+            junctions: {
+                'J_E1': { id: 'J_E1', elev: 620, baseDemand: 110, pattern: '1' },
+                'J_E2': { id: 'J_E2', elev: 680, baseDemand: 65, pattern: '1' },
+                'J_E3': { id: 'J_E3', elev: 730, baseDemand: 45, pattern: '1' },
+                'J_E4': { id: 'J_E4', elev: 590, baseDemand: 75, pattern: '1' },
+                'J_E5': { id: 'J_E5', elev: 540, baseDemand: 80, pattern: '1' },
+                'J_E6': { id: 'J_E6', elev: 710, baseDemand: 35, pattern: '1' },
+                'J_E7': { id: 'J_E7', elev: 770, baseDemand: 25, pattern: '1' }
+            },
+            reservoirs: {
+                'Forage_Ain_Bidha': { id: 'Forage_Ain_Bidha', head: 520, pattern: '' },
+                'Source_Ain_Bidha': { id: 'Source_Ain_Bidha', head: 530, pattern: '' },
+                'Forages_SK10': { id: 'Forages_SK10', head: 510, pattern: '' },
+                'Source_Romaine': { id: 'Source_Romaine', head: 630, pattern: '' }
+            },
+            tanks: {
+                'R500': { id: 'R500', elev: 500, initLevel: 3.5, minLevel: 1.0, maxLevel: 5.5, diam: 18 },
+                'R6': { id: 'R6', elev: 560, initLevel: 3.0, minLevel: 0.8, maxLevel: 4.8, diam: 24 },
+                'R1': { id: 'R1', elev: 650, initLevel: 3.2, minLevel: 1.0, maxLevel: 5.0, diam: 20 },
+                'R2': { id: 'R2', elev: 710, initLevel: 2.8, minLevel: 0.5, maxLevel: 4.0, diam: 12 },
+                'R3': { id: 'R3', elev: 760, initLevel: 2.5, minLevel: 0.5, maxLevel: 4.0, diam: 12 },
+                'R5': { id: 'R5', elev: 610, initLevel: 3.0, minLevel: 0.8, maxLevel: 4.5, diam: 16 },
+                'R7': { id: 'R7', elev: 740, initLevel: 2.2, minLevel: 0.5, maxLevel: 3.8, diam: 10 },
+                'R10': { id: 'R10', elev: 800, initLevel: 2.0, minLevel: 0.5, maxLevel: 3.5, diam: 10 }
+            },
+            pipes: {
+                'P_R6_R5': { id: 'P_R6_R5', from: 'R6', to: 'R5', length: 1800, diam: 300, roughness: 130, status: 'OPEN' },
+                'P_R1_R7': { id: 'P_R1_R7', from: 'R1', to: 'R7', length: 1400, diam: 250, roughness: 130, status: 'OPEN' },
+                'P_R3_R10': { id: 'P_R3_R10', from: 'R3', to: 'R10', length: 1200, diam: 200, roughness: 130, status: 'OPEN' },
+                'P_R1_E1': { id: 'P_R1_E1', from: 'R1', to: 'J_E1', length: 800, diam: 350, roughness: 130, status: 'OPEN' },
+                'P_R2_E2': { id: 'P_R2_E2', from: 'R2', to: 'J_E2', length: 600, diam: 250, roughness: 130, status: 'OPEN' },
+                'P_R3_E3': { id: 'P_R3_E3', from: 'R3', to: 'J_E3', length: 700, diam: 200, roughness: 130, status: 'OPEN' },
+                'P_R5_E4': { id: 'P_R5_E4', from: 'R5', to: 'J_E4', length: 900, diam: 250, roughness: 130, status: 'OPEN' },
+                'P_R6_E5': { id: 'P_R6_E5', from: 'R6', to: 'J_E5', length: 500, diam: 300, roughness: 130, status: 'OPEN' }
+            },
+            pumps: {
+                'PMP_R500_R6': { id: 'PMP_R500_R6', from: 'R500', to: 'R6', power: 75, status: 'OPEN' },
+                'PMP_R6_R1': { id: 'PMP_R6_R1', from: 'R6', to: 'R1', power: 130, status: 'OPEN' },
+                'PMP_R1_R2': { id: 'PMP_R1_R2', from: 'R1', to: 'R2', power: 45, status: 'OPEN' },
+                'PMP_R1_R3': { id: 'PMP_R1_R3', from: 'R1', to: 'R3', power: 55, status: 'OPEN' }
+            },
+            valves: {
+                'VLV_R6_R5': { id: 'VLV_R6_R5', from: 'R6', to: 'R5', diam: 250, type: 'FCV', setting: 60 },
+                'VLV_R1_R7': { id: 'VLV_R1_R7', from: 'R1', to: 'R7', diam: 200, type: 'FCV', setting: 40 }
+            },
+            patterns: {
+                '1': [0.8, 0.7, 0.6, 0.6, 0.7, 0.9, 1.2, 1.4, 1.3, 1.2, 1.1, 1.0, 1.1, 1.2, 1.1, 1.0, 1.1, 1.3, 1.5, 1.4, 1.2, 1.0, 0.9, 0.8]
+            },
+            coordinates: {
+                'Forage_Ain_Bidha': { rawX: 150, rawY: 850 },
+                'Source_Ain_Bidha': { rawX: 150, rawY: 700 },
+                'Forages_SK10': { rawX: 150, rawY: 520 },
+                'Source_Romaine': { rawX: 800, rawY: 850 },
+                'R500': { rawX: 380, rawY: 750 },
+                'R6': { rawX: 580, rawY: 650 },
+                'R1': { rawX: 880, rawY: 650 },
+                'R2': { rawX: 1150, rawY: 780 },
+                'R3': { rawX: 1150, rawY: 520 },
+                'R5': { rawX: 580, rawY: 450 },
+                'R7': { rawX: 880, rawY: 450 },
+                'R10': { rawX: 1350, rawY: 520 },
+                'J_E1': { rawX: 980, rawY: 650 },
+                'J_E2': { rawX: 1250, rawY: 780 },
+                'J_E3': { rawX: 1250, rawY: 520 },
+                'J_E4': { rawX: 680, rawY: 450 },
+                'J_E5': { rawX: 680, rawY: 650 },
+                'J_E6': { rawX: 980, rawY: 450 },
+                'J_E7': { rawX: 1450, rawY: 520 }
+            },
+            nodes: {},
+            links: {}
+        };
+        Object.entries(m.junctions).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'junction', ...m.coordinates[k] });
+        Object.entries(m.reservoirs).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'reservoir', ...m.coordinates[k] });
+        Object.entries(m.tanks).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'tank', ...m.coordinates[k] });
+        Object.entries(m.pipes).forEach(([k,v]) => m.links[k] = { ...v, type: 'pipe' });
+        Object.entries(m.pumps).forEach(([k,v]) => m.links[k] = { ...v, type: 'pump' });
+        Object.entries(m.valves).forEach(([k,v]) => m.links[k] = { ...v, type: 'valve' });
+        return m;
+    }
+
+    createNet1Model() {
+        const m = {
+            title: 'EPANET Net1 Example',
+            junctions: {
+                'J10': { id: 'J10', elev: 710, baseDemand: 0, pattern: '1' },
+                'J11': { id: 'J11', elev: 710, baseDemand: 150, pattern: '1' },
+                'J12': { id: 'J12', elev: 700, baseDemand: 150, pattern: '1' },
+                'J13': { id: 'J13', elev: 695, baseDemand: 100, pattern: '1' },
+                'J21': { id: 'J21', elev: 700, baseDemand: 150, pattern: '1' },
+                'J22': { id: 'J22', elev: 695, baseDemand: 200, pattern: '1' },
+                'J23': { id: 'J23', elev: 690, baseDemand: 150, pattern: '1' },
+                'J31': { id: 'J31', elev: 700, baseDemand: 150, pattern: '1' },
+                'J32': { id: 'J32', elev: 710, baseDemand: 100, pattern: '1' }
+            },
+            reservoirs: {
+                'River': { id: 'River', head: 700, pattern: '' }
+            },
+            tanks: {
+                'Tank2': { id: 'Tank2', elev: 850, initLevel: 4, minLevel: 1, maxLevel: 7, diam: 16 }
+            },
+            pipes: {
+                'P10': { id: 'P10', from: 'J10', to: 'J11', length: 3200, diam: 450, roughness: 140 },
+                'P11': { id: 'P11', from: 'J11', to: 'J12', length: 1600, diam: 350, roughness: 140 },
+                'P12': { id: 'P12', from: 'J12', to: 'J13', length: 1600, diam: 250, roughness: 140 },
+                'P21': { id: 'P21', from: 'J21', to: 'J22', length: 1600, diam: 250, roughness: 140 },
+                'P22': { id: 'P22', from: 'J22', to: 'J23', length: 1600, diam: 300, roughness: 140 },
+                'P31': { id: 'P31', from: 'J31', to: 'J32', length: 1600, diam: 200, roughness: 140 },
+                'P110': { id: 'P110', from: 'J11', to: 'J21', length: 1600, diam: 250, roughness: 140 },
+                'P111': { id: 'P111', from: 'J12', to: 'J22', length: 1600, diam: 300, roughness: 140 },
+                'P112': { id: 'P112', from: 'J13', to: 'J23', length: 1600, diam: 200, roughness: 140 },
+                'P113': { id: 'P113', from: 'J23', to: 'Tank2', length: 600, diam: 350, roughness: 140 }
+            },
+            pumps: {
+                'Pump9': { id: 'Pump9', from: 'River', to: 'J10', power: 100 }
+            },
+            valves: {},
+            patterns: { '1': [0.8,0.7,0.6,0.6,0.8,1.0,1.2,1.4,1.3,1.2,1.1,1.0,1.1,1.2,1.2,1.1,1.1,1.3,1.5,1.4,1.2,1.0,0.9,0.8] },
+            coordinates: {
+                'River': { rawX: 150, rawY: 600 },
+                'J10': { rawX: 350, rawY: 600 },
+                'J11': { rawX: 550, rawY: 750 },
+                'J12': { rawX: 800, rawY: 750 },
+                'J13': { rawX: 1050, rawY: 750 },
+                'J21': { rawX: 550, rawY: 550 },
+                'J22': { rawX: 800, rawY: 550 },
+                'J23': { rawX: 1050, rawY: 550 },
+                'J31': { rawX: 550, rawY: 350 },
+                'J32': { rawX: 800, rawY: 350 },
+                'Tank2': { rawX: 1250, rawY: 550 }
+            },
+            nodes: {},
+            links: {}
+        };
+        Object.entries(m.junctions).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'junction', ...m.coordinates[k] });
+        Object.entries(m.reservoirs).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'reservoir', ...m.coordinates[k] });
+        Object.entries(m.tanks).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'tank', ...m.coordinates[k] });
+        Object.entries(m.pipes).forEach(([k,v]) => m.links[k] = { ...v, type: 'pipe' });
+        Object.entries(m.pumps).forEach(([k,v]) => m.links[k] = { ...v, type: 'pump' });
+        return m;
+    }
+
+    createNet3Model() {
+        return this.createNet1Model();
+    }
+
+    createHanoiModel() {
+        const m = {
+            title: 'Hanoi Water Supply Network',
+            junctions: {
+                'N2': { id: 'N2', elev: 10, baseDemand: 890 },
+                'N3': { id: 'N3', elev: 10, baseDemand: 850 },
+                'N4': { id: 'N4', elev: 10, baseDemand: 130 },
+                'N5': { id: 'N5', elev: 10, baseDemand: 725 },
+                'N6': { id: 'N6', elev: 10, baseDemand: 1005 },
+                'N7': { id: 'N7', elev: 10, baseDemand: 1350 },
+                'N8': { id: 'N8', elev: 10, baseDemand: 550 }
+            },
+            reservoirs: {
+                'Source_Hanoi': { id: 'Source_Hanoi', head: 100 }
+            },
+            tanks: {},
+            pipes: {
+                'P1': { id: 'P1', from: 'Source_Hanoi', to: 'N2', length: 100, diam: 1000, roughness: 130 },
+                'P2': { id: 'P2', from: 'N2', to: 'N3', length: 950, diam: 1000, roughness: 130 },
+                'P3': { id: 'P3', from: 'N3', to: 'N4', length: 1200, diam: 900, roughness: 130 },
+                'P4': { id: 'P4', from: 'N4', to: 'N5', length: 1000, diam: 800, roughness: 130 },
+                'P5': { id: 'P5', from: 'N5', to: 'N6', length: 800, diam: 700, roughness: 130 },
+                'P6': { id: 'P6', from: 'N6', to: 'N7', length: 1100, diam: 600, roughness: 130 },
+                'P7': { id: 'P7', from: 'N7', to: 'N8', length: 900, diam: 500, roughness: 130 }
+            },
+            pumps: {},
+            valves: {},
+            patterns: { '1': [1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0] },
+            coordinates: {
+                'Source_Hanoi': { rawX: 150, rawY: 350 },
+                'N2': { rawX: 320, rawY: 350 },
+                'N3': { rawX: 490, rawY: 350 },
+                'N4': { rawX: 660, rawY: 350 },
+                'N5': { rawX: 830, rawY: 350 },
+                'N6': { rawX: 1000, rawY: 350 },
+                'N7': { rawX: 1170, rawY: 350 },
+                'N8': { rawX: 1340, rawY: 350 }
+            },
+            nodes: {},
+            links: {}
+        };
+        Object.entries(m.junctions).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'junction', ...m.coordinates[k] });
+        Object.entries(m.reservoirs).forEach(([k,v]) => m.nodes[k] = { ...v, type: 'reservoir', ...m.coordinates[k] });
+        Object.entries(m.pipes).forEach(([k,v]) => m.links[k] = { ...v, type: 'pipe' });
+        return m;
+    }
+}

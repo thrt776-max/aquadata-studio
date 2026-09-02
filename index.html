@@ -1,0 +1,1586 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AquaData Studio v5.0 â€” Dashboard Analytics & SCADA Hydraulics</title>
+    <link rel="stylesheet" href="css/style.css?v=2.3.0">
+    <!-- Google Fonts: Space Grotesk, Inter, JetBrains Mono & Orbitron -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&family=Orbitron:wght@500;600;700;800;900&family=Space+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Chart.js & Mermaid â€” copies locales (fonctionne hors-ligne) + fallback CDN -->
+    <script src="js/vendor/chart.umd.min.js"></script>
+    <script>
+        if (typeof window.Chart === 'undefined') {
+            document.write('<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/chart.js"><\/scr' + 'ipt>');
+        }
+    </script>
+    <script src="js/vendor/mermaid.min.js"></script>
+    <script>
+        if (typeof window.mermaid === 'undefined') {
+            document.write('<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"><\/scr' + 'ipt>');
+        }
+    </script>
+    <!-- Leaflet CSS & JS pour la cartographie SIG & tracÃ©s KML -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+</head>
+<body>
+
+    <!-- Ambient Glowing Nebulae -->
+    <div class="ambient-purple-orb"></div>
+    <div class="ambient-magenta-orb"></div>
+
+    <!-- Hidden SVG Gradients for Circular Donut Gauges -->
+    <svg width="0" height="0" style="position:absolute; visibility:hidden;">
+        <defs>
+            <linearGradient id="purple-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#7c3aed"/>
+                <stop offset="100%" stop-color="#ec4899"/>
+            </linearGradient>
+            <linearGradient id="cyan-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#06b6d4"/>
+                <stop offset="100%" stop-color="#3b82f6"/>
+            </linearGradient>
+            <linearGradient id="magenta-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#ec4899"/>
+                <stop offset="100%" stop-color="#f43f5e"/>
+            </linearGradient>
+            <linearGradient id="emerald-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#10b981"/>
+                <stop offset="100%" stop-color="#06b6d4"/>
+            </linearGradient>
+        </defs>
+    </svg>
+
+    <!-- ================================================================
+         INTRO SPLASH SCREEN (AffichÃ© Ã  l'ouverture de l'URL)
+         ================================================================ -->
+    <div id="intro-splash-overlay" class="intro-splash-overlay intro-cinema-mode">
+        <canvas id="intro-cinema-canvas"></canvas>
+        <div class="intro-cinema-vignette"></div>
+        <div id="intro-caption" class="intro-caption"></div>
+        <div id="intro-final-welcome" class="intro-final-welcome" aria-hidden="true">
+            <h1 class="ifw-title">WELCOME</h1>
+            <div class="ifw-sub">AQUADATA STUDIO</div>
+            <div class="ifw-line"></div>
+        </div>
+        <div class="intro-cinema-actions">
+            <div class="intro-countdown-text">â±ï¸ <span id="intro-countdown-sec">Ouverture automatique</span> Â· SystÃ¨me prÃªt</div>
+            <div class="intro-buttons-group">
+                <button id="btn-skip-intro" class="cin-btn cin-btn-ghost" onclick="document.getElementById('intro-splash-overlay').style.display='none';">â­ï¸ Passer l'Intro</button>
+                <button id="btn-open-deck-intro" class="cin-btn cin-btn-ghost" onclick="document.getElementById('intro-splash-overlay').style.display='none'; document.getElementById('canva-presentation-modal').style.display='flex';">ðŸ“½ï¸ Pitch Deck ExÃ©cutif</button>
+                <button id="btn-enter-dashboard" class="cin-btn cin-btn-primary" onclick="document.getElementById('intro-splash-overlay').style.display='none';">
+                    <span>ðŸš€ Entrer dans le Cockpit</span>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         CANVA-STYLE PRESENTATION MODAL
+         ================================================================ -->
+    <div id="canva-presentation-modal" class="canva-modal-overlay" style="display:none;">
+        <div class="canva-modal-box">
+            <div class="canva-modal-header">
+                <div class="canva-modal-title-group">
+                    <div class="canva-badge">EXECUTIVE STRATEGY DECK</div>
+                    <h2>AquaData Studio â€” Direction Technique & Exploitation AEP</h2>
+                </div>
+                <button id="btn-close-canva-modal" class="canva-btn-close">&times;</button>
+            </div>
+            
+            <div class="canva-slides-viewport">
+                <!-- Slide 1: Topology & Network Overview -->
+                <div class="canva-slide active">
+                    <div class="slide-badge">DIAPOSITIVE 01 / 05 Â· TOPOLOGIE RÃ‰SEAU</div>
+                    <h3 class="slide-title">Supervision & Topologie Hydraulique du RÃ©seau AEP</h3>
+                    <p class="slide-subtitle">Un complexe d'adduction stratÃ©gique reliant 12 forages profonds, 12 rÃ©servoirs et 7 zones de consommation urbaine.</p>
+                    <div class="slide-grid-3">
+                        <div class="slide-card">
+                            <div class="sc-icon">ðŸ’§</div>
+                            <h4>12 Forages Profonds</h4>
+                            <p>Champ de captage haute capacitÃ© R500 (F1 Ã  F12) + forages auxiliaires Ain Bidha et SK10 dÃ©livrant jusqu'Ã  1 200 mÂ³/h.</p>
+                        </div>
+                        <div class="slide-card">
+                            <div class="sc-icon">ðŸ›ï¸</div>
+                            <h4>RÃ©servoir Pivot R6 (5 000 mÂ³)</h4>
+                            <p>NÅ“ud central de stockage rÃ©gulateur garantissant l'autonomie et la pression vers les bassins secondaires R1, R5 et R7.</p>
+                        </div>
+                        <div class="slide-card">
+                            <div class="sc-icon">ðŸš°</div>
+                            <h4>7 Ã‰tages de Demande â€” alimentÃ©s par R1, R2, R3, R5, R6, R7, R10</h4>
+                            <p>Profils de consommation journaliers modulÃ©s heure par heure selon les coefficients rÃ©els de consommation.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 2: Mathematical Modeling -->
+                <div class="canva-slide">
+                    <div class="slide-badge">DIAPOSITIVE 02 / 05 Â· MODÃ‰LISATION MATHÃ‰MATIQUE</div>
+                    <h3 class="slide-title">Formulation de l'Ã‰quation d'Ã‰tat & Bilan Massique</h3>
+                    <p class="slide-subtitle">ModÃ©lisation rigoureuse en espace d'Ã©tat avec conservation absolue des volumes et des charges hydrauliques.</p>
+                    <div class="slide-formula-banner">
+                        <code>V_i(t+1) = V_i(t) + \Delta t \cdot \left[ \sum Q_{in,i}(t) - \sum Q_{out,i}(t) - D_i(t) \right]</code>
+                    </div>
+                    <div class="slide-grid-2">
+                        <div class="slide-card">
+                            <h4>Contraintes de CapacitÃ© (V_min â‰¤ V_i â‰¤ V_max)</h4>
+                            <p>Garantie mathÃ©matique de non-dÃ©bordement et maintien continu d'une rÃ©serve minimale de sÃ©curitÃ© incendie et secours.</p>
+                        </div>
+                        <div class="slide-card">
+                            <h4>Invariance PÃ©riodique 24h (V_i(24) â‰¥ V_i(0))</h4>
+                            <p>Le stock final dans chaque rÃ©servoir Ã  23h59 est supÃ©rieur ou Ã©gal au stock de dÃ©part Ã  00h00, Ã©liminant tout dÃ©ficit journalier.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 3: STEG Tariff Arbitrage -->
+                <div class="canva-slide">
+                    <div class="slide-badge">DIAPOSITIVE 03 / 05 Â· ARBITRAGE TARIFAIRE Ã‰NERGIE</div>
+                    <h3 class="slide-title">StratÃ©gie d'Effacement Ã‰nergÃ©tique STEG & Optimisation</h3>
+                    <p class="slide-subtitle">Exploitation optimale de la structure tarifaire tri-horaire pour concentrer le pompage aux heures creuses.</p>
+                    <div class="slide-tariff-tiers">
+                        <div class="tariff-tier-box tier-hc">
+                            <div class="ttb-header">ðŸŒ™ Heures Creuses (HC)</div>
+                            <div class="ttb-price">0.222 DT / kWh</div>
+                            <div class="ttb-desc">22h00 â€“ 07h00 (9h) Â· Remplissage massif des cuves Ã  coÃ»t minimal</div>
+                        </div>
+                        <div class="tariff-tier-box tier-hp">
+                            <div class="ttb-header">â˜€ï¸ Heures Pleines (HP)</div>
+                            <div class="ttb-price">0.290 DT / kWh</div>
+                            <div class="ttb-desc">07h00 â€“ 17h00 / 21h00 â€“ 22h00 Â· RÃ©gulation et Ã©quilibre de transfert</div>
+                        </div>
+                        <div class="tariff-tier-box tier-hph">
+                            <div class="ttb-header">ðŸ”¥ Pointe du Soir (HPH)</div>
+                            <div class="ttb-price">0.377 â€“ 0.620 DT / kWh</div>
+                            <div class="ttb-desc">17h00 â€“ 21h00 (4h) Â· Effacement maximal par dÃ©stockage gravitaire</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 4: Optimization Algorithm -->
+                <div class="canva-slide">
+                    <div class="slide-badge">DIAPOSITIVE 04 / 05 Â· SOLVEUR HYBRIDE MILP / IA</div>
+                    <h3 class="slide-title">Algorithme d'Optimisation Binaire & Plan Optimal</h3>
+                    <p class="slide-subtitle">Minimisation mathÃ©matique de la fonction objectif financiÃ¨re sous contraintes physiques et opÃ©rationnelles.</p>
+                    <div class="slide-grid-2">
+                        <div class="slide-card highlight-gold">
+                            <h4>ðŸ† Plan Optimal PX ValidÃ©</h4>
+                            <div class="slide-kpi-large">3 756.87 DT <small>/ 24h</small></div>
+                            <p>Minimisation prouvÃ©e : surcoÃ»t Ã©vitÃ© supÃ©rieur Ã  1 800 DT/jour par rapport Ã  une exploitation non planifiÃ©e.</p>
+                        </div>
+                        <div class="slide-card">
+                            <h4>âš™ï¸ Solveur d'Ordonnancement Hybride</h4>
+                            <p>Algorithme d'optimisation non linÃ©aire et heuristique gÃ©nÃ©tique convergeant en moins de 150 ms directement dans le navigateur.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Slide 5: Strategic Decision Matrix -->
+                <div class="canva-slide">
+                    <div class="slide-badge">DIAPOSITIVE 05 / 05 Â· TABLEAU DE BORD DÃ‰CISIONNEL</div>
+                    <h3 class="slide-title">Bilan SynthÃ©tique & Valeur AjoutÃ©e Industrielle</h3>
+                    <p class="slide-subtitle">SynthÃ¨se opÃ©rationnelle pour les comitÃ©s de direction et ingÃ©nieurs d'exploitation.</p>
+                    <div class="slide-grid-3">
+                        <div class="slide-card">
+                            <div class="sc-icon">âš¡</div>
+                            <h4>-28.5% CoÃ»t Ã‰nergie</h4>
+                            <p>Ã‰conomie financiÃ¨re dÃ©montrÃ©e sur la facture Ã©lectrique journaliÃ¨re.</p>
+                        </div>
+                        <div class="slide-card">
+                            <div class="sc-icon">ðŸ›¡ï¸</div>
+                            <h4>100% SÃ©curitÃ© Eau</h4>
+                            <p>RÃ©serves stratÃ©giques maintenues au-dessus des seuils de criticitÃ©.</p>
+                        </div>
+                        <div class="slide-card">
+                            <div class="sc-icon">ðŸ“Š</div>
+                            <h4>Transparence Totale</h4>
+                            <p>Bilan Ã©nergÃ©tique, massique et financier exportable en CSV et Excel en un clic.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slide Navigation Footer -->
+            <div class="canva-modal-footer">
+                <button id="canva-prev-slide" class="btn-scada btn-secondary">â—€ PrÃ©cÃ©dente</button>
+                <div id="canva-slide-indicators" class="canva-indicators-group"></div>
+                <button id="canva-next-slide" class="btn-scada btn-primary">Suivante â–¶</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         MAIN APP CONTAINER FRAME (Rounded Indigo Theme Matching Mockup)
+         ================================================================ -->
+    <div class="app-container-frame">
+        
+        <!-- Left Vertical Dock Sidebar -->
+        <aside class="app-sidebar-dock">
+            <div class="sidebar-logo-icon" id="sidebar-logo-reopen-intro" title="Ouvrir l'Introduction & Diagnostic">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+            </div>
+
+            <nav class="sidebar-nav-list scada-tabs">
+                <button class="sidebar-nav-btn tab-btn active" data-tab="pane-dashboard" title="Dashboard Analytics">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-epanet-synoptic" title="ðŸŒŠ EPANET â€” Synoptique Hydraulique 24h">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-gis-map" title="ðŸ—ºï¸ Carte SIG Interactive â€” Le Kef">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"></polygon><line x1="8" y1="2" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="22"></line></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-scenario-compare" title="âš–ï¸ Comparaison des ScÃ©narios A/B">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="3" width="9" height="18" rx="2"></rect><rect x="13" y="3" width="9" height="18" rx="2"></rect><line x1="6.5" y1="9" x2="6.5" y2="15"></line><line x1="17.5" y1="9" x2="17.5" y2="15"></line></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-schema" title="Synoptique SCADA 24h & SchÃ©ma">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18"></path><path d="M3 12h18"></path></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-datascience" title="Data Science & Analytics">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-schedule" title="Planning 24h & Matrice">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-vannes" title="Vannes Gravitaires & DÃ©bits Horaires (00h-23h)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"></circle><path d="M3 7v10l9-5-9-5z"></path><path d="M21 7v10l-9-5 9-5z"></path><line x1="12" y1="2" x2="12" y2="9"></line><line x1="12" y1="15" x2="12" y2="22"></line></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-pro-analyser" title="Pro Analyser & Aide Ã  la DÃ©cision">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-excel" title="Tableur Excel & Formules">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-guide" title="Guide PÃ©dagogique & Ã‰quations">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-params" title="ParamÃ¨tres RÃ©seau & Tarifs STEG">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                </button>
+                <button class="sidebar-nav-btn tab-btn" data-tab="pane-table" title="Grand Livre & Bilan Hydraulique">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                </button>
+            </nav>
+
+            <div class="sidebar-bottom-actions">
+                <button id="btn-open-canva-presentation" class="sidebar-nav-btn" title="Pitch Deck ExÃ©cutif">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                </button>
+                <button id="btn-open-labels-modal" class="sidebar-nav-btn" title="Renommer Ã‰quipements">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="app-main-content">
+            
+            <!-- Top Analytics & Header Bar -->
+            <header class="top-analytics-header">
+                <div class="header-title-search">
+                    <div class="dashboard-main-heading">
+                        <h1>Dashboard Analytics</h1>
+                        <p>Supervision & Optimisation Hydraulique 24h</p>
+                    </div>
+
+                    <div class="header-search-bar">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text" placeholder="Rechercher forage, rÃ©servoir, noeud...">
+                    </div>
+                </div>
+
+                <div class="header-actions-profile">
+                    <!-- Hero Presets (hidden, triggered by schedule-tab presets) -->
+                    <button id="hero-preset-night" style="display:none;">Ã‰co Nuit</button>
+                    <button id="hero-preset-balanced" style="display:none;">Ã‰quilibrÃ©</button>
+                    <button id="hero-preset-buffer" style="display:none;">RÃ©serve Haute</button>
+                    <button id="hero-preset-opt" style="display:none;">Optimiser</button>
+
+                    <div class="opt-time-selector-wrap" style="display:inline-flex; align-items:center; gap:4px; margin-right:4px;">
+                        <select id="opt-time-limit" class="scada-select-sm" title="DurÃ©e de rÃ©solution maximale accordÃ©e au solveur MILP CBC" style="background:#141738; border:1px solid rgba(56,189,248,0.4); color:#38bdf8; font-weight:700; border-radius:6px; padding:4px 6px; font-size:0.75rem; height:32px;">
+                            <option value="120" selected>â± 120s (RecommandÃ©)</option>
+                            <option value="180">â± 180s (Approfondi)</option>
+                            <option value="300">â± 300s (PrÃ©cision Max)</option>
+                            <option value="60">â± 60s (Rapide)</option>
+                        </select>
+                    </div>
+
+                    <button id="btn-auto-optimize" class="btn-header-action btn-opt-glow" title="Lancer l'optimisation mathÃ©matique du planning MILP (PuLP / CBC)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                        <span>ðŸ¤– Optimiser MILP</span>
+                    </button>
+                    <button id="btn-run-sim" class="btn-header-action btn-primary-glow" title="ExÃ©cuter la simulation hydraulique 24h">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                        <span>â–¶ Simuler RÃ©seau</span>
+                    </button>
+                    <button id="btn-apply-optimal-plan-top" class="btn-header-action btn-optimal-glow" title="Appliquer le ScÃ©nario Optimale (pompes + vannes modulÃ©es + tarif TPH 08h-13h = 290 millimes)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+                        <span>âš¡ Plan Optimal</span>
+                    </button>
+                    <button id="btn-save-scenario-modal" class="btn-header-action" title="GÃ©rer & Enregistrer les scÃ©narios">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline></svg>
+                        <span>ðŸ’¾ ScÃ©narios</span>
+                    </button>
+                    <button id="btn-export-csv" class="btn-header-action" title="Exporter les donnÃ©es au format CSV">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span>ðŸ“¥ Exporter CSV</span>
+                    </button>
+
+                    <div class="operator-profile-card">
+                        <div class="profile-avatar-glow">AEP</div>
+                        <div class="profile-info">
+                            <span class="profile-name">Station Centrale R6</span>
+                            <span class="profile-status"><span class="status-dot-green"></span> <span id="header-clock-time">UTC --:--:--</span></span>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- System Status Bar (below header) -->
+            <div class="system-status-ribbon">
+                <div class="status-left">
+                    <span id="system-status-badge" class="system-status-badge"></span>
+                    <span id="system-status-text" class="status-main-label">SYSTÃˆME NOMINAL (0 Alerte)</span>
+                </div>
+                <div class="status-right">
+                    <span class="status-clock-badge" id="mission-clock-display">SOLVER READY Â· LINK 99.98% Â· UTC --:--:--</span>
+                    <span id="active-scenario-tag" class="status-scenario-badge">ScÃ©nario : <strong>Baseline</strong></span>
+                    <span id="kpi-alerts-foot" class="status-alerts-badge">Alertes : <strong id="kpi-alerts-count">0</strong></span>
+                </div>
+            </div>
+
+            <!-- Main Horizontal Navigation Tabs Bar -->
+            <nav class="main-nav-tabs-ribbon" aria-label="Navigation principale">
+                <button type="button" class="nav-tab-pill tab-btn active" data-tab="pane-dashboard" title="Cockpit Principal Analytics">
+                    <span class="pill-icon">ðŸ“Š</span>
+                    <span class="pill-title">Cockpit Analytics</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-scenario-compare" title="Comparaison Multi-ScÃ©narios A vs B">
+                    <span class="pill-icon">âš–ï¸</span>
+                    <span class="pill-title">Comparaison ScÃ©narios</span>
+                    <span class="pill-badge-highlight">A vs B</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-epanet-synoptic" title="Synoptique Hydraulique EPANET 24h">
+                    <span class="pill-icon">ðŸŒŠ</span>
+                    <span class="pill-title">EPANET 24h</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-gis-map" title="Carte SIG Interactive Le Kef">
+                    <span class="pill-icon">ðŸ—ºï¸</span>
+                    <span class="pill-title">Carte SIG</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-schedule" title="Planning & Matrice 24h des Pompes">
+                    <span class="pill-icon">â±ï¸</span>
+                    <span class="pill-title">Planning Pompes</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-vannes" title="Vannes Gravitaires & DÃ©bits Horaires">
+                    <span class="pill-icon">ðŸš°</span>
+                    <span class="pill-title">Vannes Gravitaires</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-pro-analyser" title="Pro Analyser & Aide Ã  la DÃ©cision">
+                    <span class="pill-icon">ðŸ¤–</span>
+                    <span class="pill-title">Pro Analyser</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-datascience" title="Data Science & CorrÃ©lations">
+                    <span class="pill-icon">ðŸ“ˆ</span>
+                    <span class="pill-title">Data Science</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-excel" title="Tableur Excel Hydraulique">
+                    <span class="pill-icon">ðŸ“‘</span>
+                    <span class="pill-title">Tableur Excel</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-table" title="Grand Livre & Bilan Journalier">
+                    <span class="pill-icon">ðŸ“‹</span>
+                    <span class="pill-title">Grand Livre</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-params" title="ParamÃ¨tres RÃ©seau & Tarifs STEG">
+                    <span class="pill-icon">âš™ï¸</span>
+                    <span class="pill-title">ParamÃ¨tres & Tarifs</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-guide" title="Guide PÃ©dagogique & Ã‰quations">
+                    <span class="pill-icon">ðŸ“š</span>
+                    <span class="pill-title">Guide & Ã‰quations</span>
+                </button>
+                <button type="button" class="nav-tab-pill tab-btn" data-tab="pane-schema" title="SchÃ©ma Logique & Topologie">
+                    <span class="pill-icon">ðŸ“</span>
+                    <span class="pill-title">SchÃ©ma SCADA</span>
+                </button>
+            </nav>
+
+            <!-- Optimal Plan Applied Banner -->
+            <div id="optimal-plan-banner" style="display:none; align-items:center; justify-content:space-between; background:linear-gradient(90deg, rgba(16,185,129,0.18), rgba(6,182,212,0.12)); border:1px solid rgba(16,185,129,0.4); border-radius:var(--radius-sm); padding:0.5rem 1rem; margin-bottom:0.5rem; gap:0.75rem; flex-wrap:wrap;">
+                <span style="color:#34d399; font-weight:700; font-size:0.85rem;">âœ… ScÃ©nario Optimale ActivÃ© â€” CoÃ»t total : <strong>4 397,28 DT / 24h</strong> (Plan 30 pompes + vannes modulÃ©es + TPH Matin 290 millimes)</span>
+                <button id="btn-dismiss-optimal-banner" style="background:none; border:1px solid rgba(16,185,129,0.4); color:#34d399; border-radius:4px; padding:2px 10px; cursor:pointer; font-size:0.75rem;">âœ• Fermer</button>
+            </div>
+
+            <!-- Top 4 Circular Donut Gauge Metric Cards (Exact Reference Design) -->
+            <section class="top-metrics-gauge-grid">
+                <!-- Gauge 1: CoÃ»t Total -->
+                <div class="metric-gauge-card">
+                    <div class="circular-gauge-box">
+                        <svg viewBox="0 0 60 60">
+                            <circle class="gauge-bg-circle" cx="30" cy="30" r="25"></circle>
+                            <circle class="gauge-progress-circle gauge-purple" cx="30" cy="30" r="25" style="stroke-dashoffset: 24;"></circle>
+                        </svg>
+                        <span class="gauge-percentage-text">85%</span>
+                    </div>
+                    <div class="metric-gauge-details">
+                        <span class="metric-gauge-value" id="kpi-cost">3 756.87 DT</span>
+                        <span class="metric-gauge-label">CoÃ»t Total 24h</span>
+                        <span class="metric-gauge-sub">Objectif MILP Binaire</span>
+                    </div>
+                </div>
+
+                <!-- Gauge 2: Volume DistribuÃ© -->
+                <div class="metric-gauge-card">
+                    <div class="circular-gauge-box">
+                        <svg viewBox="0 0 60 60">
+                            <circle class="gauge-bg-circle" cx="30" cy="30" r="25"></circle>
+                            <circle class="gauge-progress-circle gauge-cyan" cx="30" cy="30" r="25" style="stroke-dashoffset: 55;"></circle>
+                        </svg>
+                        <span class="gauge-percentage-text">65%</span>
+                    </div>
+                    <div class="metric-gauge-details">
+                        <span class="metric-gauge-value" id="kpi-volume-dist">18 450 mÂ³</span>
+                        <span class="metric-gauge-label">Volume DistribuÃ©</span>
+                        <span class="metric-gauge-sub">Demande des 7 Ã‰tages</span>
+                    </div>
+                </div>
+
+                <!-- Gauge 3: Ã‰nergie Totale -->
+                <div class="metric-gauge-card">
+                    <div class="circular-gauge-box">
+                        <svg viewBox="0 0 60 60">
+                            <circle class="gauge-bg-circle" cx="30" cy="30" r="25"></circle>
+                            <circle class="gauge-progress-circle gauge-magenta" cx="30" cy="30" r="25" style="stroke-dashoffset: 39;"></circle>
+                        </svg>
+                        <span class="gauge-percentage-text">75%</span>
+                    </div>
+                    <div class="metric-gauge-details">
+                        <span class="metric-gauge-value" id="kpi-energy">14 820 kWh</span>
+                        <span class="metric-gauge-label">Ã‰nergie Totale PompÃ©e</span>
+                        <span class="metric-gauge-sub">38 Groupes Forages/Relais</span>
+                    </div>
+                </div>
+
+                <!-- Gauge 4: Conso SpÃ©cifique -->
+                <div class="metric-gauge-card">
+                    <div class="circular-gauge-box">
+                        <svg viewBox="0 0 60 60">
+                            <circle class="gauge-bg-circle" cx="30" cy="30" r="25"></circle>
+                            <circle class="gauge-progress-circle gauge-emerald" cx="30" cy="30" r="25" style="stroke-dashoffset: 55;"></circle>
+                        </svg>
+                        <span class="gauge-percentage-text">65%</span>
+                    </div>
+                    <div class="metric-gauge-details">
+                        <span class="metric-gauge-value" id="kpi-spec-energy">0.803 kWh/mÂ³</span>
+                        <span class="metric-gauge-label">Conso SpÃ©cifique</span>
+                        <span class="metric-gauge-sub">Rendement Ã‰nergÃ©tique</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Professional Technical KPIs Strip (Clean SCADA badges, no awkward wrapping) -->
+            <section class="pro-kpis-strip">
+                <div class="pro-kpi-pill kpi-pill-savings">
+                    <div class="kpi-icon-wrapper icon-green">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                    </div>
+                    <div class="pro-kpi-data">
+                        <span class="kpi-subtitle">Ã‰CONOMIE VS BASELINE</span>
+                        <strong id="kpi-savings-val" class="kpi-val-highlight">-28.3% (-1 483 DT)</strong>
+                    </div>
+                </div>
+                <div class="pro-kpi-pill kpi-pill-tanks">
+                    <div class="kpi-icon-wrapper icon-cyan">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 6h16M4 12h16M4 18h16M7 6v12M17 6v12"></path></svg>
+                    </div>
+                    <div class="pro-kpi-data">
+                        <span class="kpi-subtitle">RÃ‰SERVOIRS CONFORMES</span>
+                        <strong id="kpi-tanks-compliance">12 / 12 (Vmin â‰¤ V â‰¤ Vmax)</strong>
+                    </div>
+                </div>
+                <div class="pro-kpi-pill kpi-pill-demand">
+                    <div class="kpi-icon-wrapper icon-blue">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path></svg>
+                    </div>
+                    <div class="pro-kpi-data">
+                        <span class="kpi-subtitle">DEMANDE SATISFAITE</span>
+                        <strong id="kpi-demand-satisfaction">100.0% (7 Ã‰tages E1â†’E7)</strong>
+                    </div>
+                </div>
+                <div class="pro-kpi-pill kpi-pill-switching">
+                    <div class="kpi-icon-wrapper icon-purple">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                    </div>
+                    <div class="pro-kpi-data">
+                        <span class="kpi-subtitle">COMMUTATIONS / FATIGUE</span>
+                        <strong id="kpi-switching-total">35 cycles / 24h</strong>
+                    </div>
+                </div>
+                <div class="pro-kpi-pill kpi-pill-tariffs">
+                    <div class="kpi-icon-wrapper icon-amber">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                    </div>
+                    <div class="pro-kpi-data">
+                        <span class="kpi-subtitle">POMPAGE NUIT / POINTE</span>
+                        <strong id="kpi-night-peak-hours">168h Nuit Â· 12h Pointe</strong>
+                    </div>
+                </div>
+                <div class="pro-kpi-pill highlight kpi-pill-status">
+                    <div class="kpi-icon-wrapper icon-emerald">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                    </div>
+                    <div class="pro-kpi-data">
+                        <span class="kpi-subtitle">VALIDATION HYDRAULIQUE</span>
+                        <strong id="kpi-hydraulic-status-tag" class="status-badge-valide">VALIDE ðŸŸ¢</strong>
+                    </div>
+                </div>
+            </section>
+
+
+            <!-- ================================================================
+                 TAB PANE 1: DASHBOARD ANALYTICS (Matches Reference Image Layout)
+                 ================================================================ -->
+            <div id="pane-dashboard" class="tab-pane active">
+                
+                <div class="dashboard-analytics-grid dashboard-stacked">
+
+                    <!-- 1) HISTOGRAMME COÃ›T & DEMANDE â€” PLEINE LARGEUR, TOUT SEUL EN TÃŠTE -->
+                    <div class="dash-card" style="margin-bottom:1.5rem;">
+                        <div class="dash-card-header">
+                            <div class="dash-card-title">ðŸŒŠ Production vs Demande & CoÃ»ts (24h)</div>
+                            <span class="dash-card-badge">mÂ³/h Â· TND</span>
+                        </div>
+                        <div class="chart-box-container" style="height:400px;">
+                            <canvas id="chart-flow-balance"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- 2) NÅ“uds StratÃ©giques (Tableau) -->
+                    <div class="trending-stations-widget dash-card" style="margin-bottom:1.5rem;">
+                        <div class="dash-card-header" style="margin-bottom:0.5rem;">
+                            <div class="dash-card-title">ðŸ›ï¸ NÅ“uds StratÃ©giques</div>
+                            <span class="dash-card-badge">SCADA Live</span>
+                        </div>
+
+                        <div class="trending-item">
+                            <div class="station-node-info">
+                                <div class="node-icon-circle">R5</div>
+                                <div class="node-name-status">
+                                    <strong>RÃ©servoir R500</strong>
+                                    <span>Stock: 385 / 500 mÂ³</span>
+                                </div>
+                            </div>
+                            <span class="node-trend-val">99.8% ðŸŸ¢</span>
+                        </div>
+
+                        <div class="trending-item">
+                            <div class="station-node-info">
+                                <div class="node-icon-circle">R6</div>
+                                <div class="node-name-status">
+                                    <strong>RÃ©servoir Pivot R6</strong>
+                                    <span>Stock: 3 920 / 5000 mÂ³</span>
+                                </div>
+                            </div>
+                            <span class="node-trend-val">100% ðŸŸ¢</span>
+                        </div>
+
+                        <div class="trending-item">
+                            <div class="station-node-info">
+                                <div class="node-icon-circle">R1</div>
+                                <div class="node-name-status">
+                                    <strong>RÃ©servoir R1</strong>
+                                    <span>Stock: 381 / 500 mÂ³</span>
+                                </div>
+                            </div>
+                            <span class="node-trend-val">98.5% ðŸŸ¢</span>
+                        </div>
+
+                        <div class="trending-item">
+                            <div class="station-node-info">
+                                <div class="node-icon-circle">R7</div>
+                                <div class="node-name-status">
+                                    <strong>RÃ©servoir R7</strong>
+                                    <span>Stock: 961 / 1500 mÂ³</span>
+                                </div>
+                            </div>
+                            <span class="node-trend-val">100% ðŸŸ¢</span>
+                        </div>
+                    </div>
+
+                    <!-- 3) Puissance STEG -->
+                    <div class="dash-card" style="margin-bottom:1.5rem;">
+                        <div class="dash-card-header">
+                                                        <div class="dash-card-title">ðŸ• Puissance par PÃ©riode STEG</div>
+                            <span class="dash-card-badge">kW</span>
+                        </div>
+                        <div class="chart-box-container" style="height:320px;">
+                            <canvas id="chart-tarif-repartition"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- 4) DÃ©penses STEG -->
+                    <div class="dash-card donut-expense-card" style="margin-bottom:1.5rem;">
+                        <div class="dash-card-header">
+                            <div class="dash-card-title">ðŸ’° DÃ©penses STEG</div>
+                            <span class="dash-card-badge">% Tranches</span>
+                        </div>
+                        <div class="donut-visual-container" style="height:260px;">
+                            <canvas id="chart-radar-performance"></canvas>
+                        </div>
+                        <div class="donut-legend-row">
+                            <div class="legend-item"><span class="legend-dot dot-nuit"></span> Nuit (HC)</div>
+                            <div class="legend-item"><span class="legend-dot dot-pleine"></span> Pleine (HP)</div>
+                            <div class="legend-item"><span class="legend-dot dot-pointe"></span> Pointe (HPS)</div>
+                        </div>
+                    </div>
+<!-- 5 Â· Tableau Ã‰tat des Stations -->
+                    <div class="dash-card" style="margin-bottom:1.5rem;">
+                        <div class="dash-card-header">
+                            <div class="dash-card-title">ðŸš° Ã‰tat des Stations & DÃ©bits Pompage</div>
+                            <span class="dash-card-badge">Temps RÃ©el</span>
+                        </div>
+                        <div class="dark-scada-table-wrapper">
+                            <table class="dark-scada-table">
+                                <thead>
+                                    <tr>
+                                        <th>Station / Ã‰quipement</th>
+                                        <th>DÃ©bit (mÂ³/h)</th>
+                                        <th>HMT (mCE)</th>
+                                        <th>Puissance (kW)</th>
+                                        <th>Statut</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Forages R500 (F1â†’F12)</td>
+                                        <td>786.6 mÂ³/h</td>
+                                        <td>48.5 m</td>
+                                        <td>350.1 kW</td>
+                                        <td><span class="table-status-pill pill-complete">OptimisÃ© ðŸŸ¢</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>Relais R500 â†’ R6 (P1+P2)</td>
+                                        <td>1 051.2 mÂ³/h</td>
+                                        <td>52.0 m</td>
+                                        <td>258.0 kW</td>
+                                        <td><span class="table-status-pill pill-progress">En Charge ðŸ”µ</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>Relais R6 â†’ R1 (P1+P2)</td>
+                                        <td>756.0 mÂ³/h</td>
+                                        <td>45.0 m</td>
+                                        <td>287.4 kW</td>
+                                        <td><span class="table-status-pill pill-complete">RÃ©gulÃ© ðŸŸ¢</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>Ain Bidha â†’ Zaafrane</td>
+                                        <td>93.6 mÂ³/h</td>
+                                        <td>32.0 m</td>
+                                        <td>28.5 kW</td>
+                                        <td><span class="table-status-pill pill-pending">Standby ðŸŸ¡</span></td>
+                                    </tr>
+                                    <tr>
+                                        <td>SK10 Relais â†’ R6</td>
+                                        <td>36.0 mÂ³/h</td>
+                                        <td>28.0 m</td>
+                                        <td>15.2 kW</td>
+                                        <td><span class="table-status-pill pill-complete">Nominal ðŸŸ¢</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 6 Â· CoÃ»t CumulÃ© vs Volume -->
+                    <div class="dash-card" style="margin-bottom:1.5rem;">
+                        <div class="dash-card-header">
+                            <div class="dash-card-title">ðŸ“ˆ CoÃ»t CumulÃ© (TND) vs Volume PompÃ© CumulÃ© (mÂ³) â€” Courbe d'EfficacitÃ© 24h</div>
+                            <span class="dash-card-badge">Analyse FinanciÃ¨re</span>
+                        </div>
+                        <div class="chart-box-container" style="height:280px;">
+                            <canvas id="chart-cumul-cost-vol"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- 7 Â· Mini Calendrier & Plan Optimal -->
+                    <div class="mini-calendar-widget dash-card">
+                        <div class="calendar-header-row">
+                            <span class="cal-month-title">FÃ©vrier 2026</span>
+                            <div class="cal-nav-arrows">
+                                <span>â†‘</span>
+                                <span>â†“</span>
+                            </div>
+                        </div>
+                        <div class="mini-calendar-days-grid">
+                            <span class="cal-day-name">L</span>
+                            <span class="cal-day-name">M</span>
+                            <span class="cal-day-name">M</span>
+                            <span class="cal-day-name">J</span>
+                            <span class="cal-day-name">V</span>
+                            <span class="cal-day-name">S</span>
+                            <span class="cal-day-name">D</span>
+
+                            <span class="cal-day-num">16</span>
+                            <span class="cal-day-num">17</span>
+                            <span class="cal-day-num cal-active-day">18</span>
+                            <span class="cal-day-num">19</span>
+                            <span class="cal-day-num">20</span>
+                            <span class="cal-day-num">21</span>
+                            <span class="cal-day-num">22</span>
+                        </div>
+                        <div class="cal-today-cta" id="btn-trigger-optimal-cal">
+                            âš¡ APPLIQUER PLAN OPTIMAL
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- ================================================================
+                     FENÃŠTRE DÃ‰DIÃ‰E : SYNOPTIQUE SCADA INTERACTIF 24H AVEC PLAYER
+                     ================================================================ -->
+                <section class="synoptic-scada-window-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">
+                            <span>ðŸ–¥ï¸ FenÃªtre Interactive du SchÃ©ma Synoptique SCADA (Simulation 24h)</span>
+                        </div>
+                        <span class="dash-card-badge" style="background:rgba(6,182,212,0.15); color:#38bdf8;">
+                            Animation Fluide & Niveaux d'Eau
+                        </span>
+                    </div>
+
+                    <!-- Player Controls Bar -->
+                    <div class="synoptic-player-bar">
+                        <div class="syn-player-controls-left">
+                            <button id="mini-syn-play" class="btn-syn-player btn-syn-play-active">â–¶ Animer 24h</button>
+                            <button id="mini-syn-prev" class="btn-syn-player">â® -1h</button>
+                            <button id="mini-syn-next" class="btn-syn-player">â­ +1h</button>
+                        </div>
+                        <div class="syn-scrubber-center">
+                            <span class="syn-hour-badge" id="mini-syn-hour-display">23:00</span>
+                            <input type="range" id="mini-syn-slider" min="0" max="23" value="23" step="1" class="syn-timeline-slider">
+                        </div>
+                        <span id="mini-syn-hour-tag" style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);">
+                            Bilan Massique dV/dt Ã  l'instant t
+                        </span>
+                    </div>
+
+                    <!-- Synoptic Viewport -->
+                    <div class="synoptic-svg-viewport" id="scada-mini-synoptic-container">
+                        <!-- Rendered by synoptic.js -->
+                    </div>
+                </section>
+
+                <!-- ================================================================
+                     ALIMENTATION DES Ã‰TAGES â€” CHARTS DÃ‰DIÃ‰S (DASHBOARD)
+                     ================================================================ -->
+                <div class="dash-card" style="margin-top:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">
+                            <span>ðŸ½ï¸ Alimentation des 7 Ã‰tages de Demande â€” RÃ©servoirs R1/R2/R3/R5/R6/R7/R10</span>
+                        </div>
+                        <span class="dash-card-badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">
+                            Chaque Ã©tage alimentÃ© par : R1 Â· R2 Â· R3 Â· R5 Â· R6 Â· R7 Â· R10
+                        </span>
+                    </div>
+                    <div class="charts-double-row" style="margin-top:1rem;">
+                        <div>
+                            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+                                <div class="card-title" style="font-size:0.85rem; font-weight:700; color:#fff;">ðŸŽ¯ Volumes Journaliers par Ã‰tage (Polar Area)</div>
+                            </div>
+                            <div class="chart-box-container" style="height:320px;">
+                                <canvas id="chart-etage-polar"></canvas>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+                                <div class="card-title" style="font-size:0.85rem; font-weight:700; color:#fff;">ðŸ“Š Profils Horaires de Demande par Ã‰tage (00hâ†’23h)</div>
+                            </div>
+                            <div class="chart-box-container" style="height:320px;">
+                                <canvas id="chart-etage-demand-stacked"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ================================================================
+                     Ã‰VOLUTION DES VOLUMES DES 12 RÃ‰SERVOIRS (PREMIÃˆRE FENÃŠTRE)
+                     ================================================================ -->
+                <div class="dash-card" style="margin-top:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">
+                            <span>ðŸ’§ Ã‰volution des Niveaux d'Eau & Volumes des 12 RÃ©servoirs (Simulation 24h)</span>
+                        </div>
+                        <span class="dash-card-badge" style="background:rgba(16,185,129,0.15); color:#34d399;">
+                            Conservation Massique dV/dt (V_min â‰¤ V(t) â‰¤ V_max)
+                        </span>
+                    </div>
+                    <div id="reservoir-charts-dash" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(340px, 1fr)); gap:1.25rem; margin-top:1rem;">
+                        <!-- Rendered by charts.js -->
+                    </div>
+                </div>
+
+                <!-- Alerts Table (fixed inside Analytics pane) -->
+                <div class="dash-card" id="dash-alerts-card" style="margin-top:1.25rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">âš ï¸ Alertes SystÃ¨me & Analytics</div>
+                        <span class="dash-card-badge">SynthÃ¨se</span>
+                    </div>
+                    <div id="analytics-alerts-table" class="analytics-alerts-table" style="padding:0.6rem 0.8rem;">
+                        <!-- Filled by alerts.js -->
+                    </div>
+                </div>
+
+                </div>
+
+            <!-- ================================================================
+                 TAB PANE 2: DATA SCIENCE & ANALYTICS
+                 ================================================================ -->
+            <div id="pane-datascience" class="tab-pane">
+                <!-- DS Key Metrics Overview Grid -->
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
+                    <div class="dash-card" style="padding:1rem;">
+                        <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">âš¡ Ã‰nergie & Puissance</div>
+                        <div id="ds-energy-total" style="font-size:1.4rem; font-weight:800; color:var(--magenta-main); font-family:var(--font-mono); margin:0.3rem 0;">-- kWh</div>
+                        <div style="font-size:0.72rem; color:var(--text-muted); display:flex; justify-content:space-between;">
+                            <span>P. Max: <strong id="ds-power-max" style="color:#fff;">-- kW</strong></span>
+                            <span>Ratio HC: <strong id="ds-night-ratio" style="color:var(--emerald-main);">-- %</strong></span>
+                        </div>
+                    </div>
+                    <div class="dash-card" style="padding:1rem;">
+                        <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">ðŸ’§ Bilan Massique 24h</div>
+                        <div id="ds-vol-pumped" style="font-size:1.4rem; font-weight:800; color:var(--cyan-accent); font-family:var(--font-mono); margin:0.3rem 0;">-- mÂ³</div>
+                        <div style="font-size:0.72rem; color:var(--text-muted); display:flex; justify-content:space-between;">
+                            <span>DistribuÃ©: <strong id="ds-vol-dist" style="color:#fff;">-- mÂ³</strong></span>
+                            <span>Ã‰cart Î”V: <strong id="ds-vol-diff" style="color:var(--cyan-accent);">-- mÂ³</strong></span>
+                        </div>
+                    </div>
+                    <div class="dash-card" style="padding:1rem;">
+                        <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">ðŸ’° Facturation STEG 24h</div>
+                        <div id="ds-cost-total" style="font-size:1.4rem; font-weight:800; color:var(--purple-light); font-family:var(--font-mono); margin:0.3rem 0;">-- TND</div>
+                        <div style="font-size:0.72rem; color:var(--text-muted); display:flex; justify-content:space-between;">
+                            <span>CoÃ»t mÂ³: <strong id="ds-cost-m3" style="color:#fff;">-- TND/mÂ³</strong></span>
+                            <span>Conso SpÃ©c.: <strong id="ds-spec-energy" style="color:var(--purple-light);">-- kWh/mÂ³</strong></span>
+                        </div>
+                    </div>
+                    <div class="dash-card" style="padding:1rem;">
+                        <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">âš™ï¸ Diagnostic Pompage</div>
+                        <div id="ds-critical-res" style="font-size:0.95rem; font-weight:700; color:#34d399; margin:0.3rem 0;">Nominal</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">
+                            <span>Top pompes: <strong id="ds-top-pumps" style="color:#fff;">--</strong></span>
+                        </div>
+                        <div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
+                            <span>Non activÃ©es: <strong id="ds-unused-pumps" style="color:var(--text-muted);">--</strong></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="charts-double-row" style="margin-bottom:1.5rem;">
+                    <div class="dash-card">
+                        <div class="dash-card-header">
+                            <div class="dash-card-title">âš¡ Puissance & Appel Ã‰lectrique</div>
+                            <span class="dash-card-badge">kW</span>
+                        </div>
+                        <div class="chart-box-container" style="height:300px;">
+                            <canvas id="chart-energy-power"></canvas>
+                        </div>
+                    </div>
+                    <div class="dash-card">
+                        <div class="dash-card-header">
+                            <div class="dash-card-title">ðŸ’¸ DÃ©composition des CoÃ»ts STEG</div>
+                            <span class="dash-card-badge">TND / h</span>
+                        </div>
+                        <div class="chart-box-container" style="height:300px;">
+                            <canvas id="chart-cost-breakdown"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸŽ¯ Performance Ã‰nergÃ©tique SpÃ©cifique (38 Pompes & Forages)</div>
+                        <span class="dash-card-badge">kWh / mÂ³</span>
+                    </div>
+                    <div class="chart-box-container" style="height:500px;">
+                        <canvas id="chart-spec-energy-pumps"></canvas>
+                    </div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ“Š Diagramme de Pareto Ã‰nergÃ©tique (RÃ¨gle 80/20)</div>
+                        <span class="dash-card-badge">Consommation CumulÃ©e</span>
+                    </div>
+                    <div class="chart-box-container" style="height:340px;">
+                        <canvas id="chart-pareto-energy"></canvas>
+                    </div>
+                </div>
+
+                <!-- Stacked vertically (lisible) : 1) Niveaux RÃ©servoirs â†’ 2) Codes Ã‰quipements â†’ 3) Heatmap (ordre dÃ©croissant) -->
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header"><div class="dash-card-title">ðŸ’§ Niveaux RÃ©servoirs (Barres)</div></div>
+                    <div id="ds-reservoir-bars" style="padding:0.75rem;"></div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header"><div class="dash-card-title">ðŸ› ï¸ Codes & CentralitÃ© des Ã‰quipements Hydrauliques</div></div>
+                    <div id="ds-centrality-container" style="padding:0.75rem;"></div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header"><div class="dash-card-title">ðŸ—“ï¸ Calendrier de Pompage â€” Planning 24h (Ordre DÃ©croissant)</div></div>
+                    <div id="ds-heatmap-matrix-container" style="padding:0.75rem; overflow-x:auto;"></div>
+                </div>
+
+                <div class="dash-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸŒŠ Niveaux d'Eau des RÃ©servoirs (Ã‰volution 24h)</div>
+                        <span class="dash-card-badge">V(t) en mÂ³</span>
+                    </div>
+                    <div id="reservoir-charts-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1rem;">
+                        <!-- Reservoir charts rendered by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 3: PLANNING 24H & MATRICE
+                 ================================================================ -->
+            <div id="pane-schedule" class="tab-pane">
+                <div class="dash-card">
+                    <div class="dash-card-header" style="flex-wrap:wrap; gap:0.75rem;">
+                        <div class="dash-card-title">ðŸ—“ï¸ Planning d'Activation des 38 Ã‰quipements (00h Ã  23h)</div>
+                        <div style="display:flex; gap:0.6rem; flex-wrap:wrap;">
+                            <button id="btn-open-scenario-builder" class="btn-header-action btn-primary-glow" title="Ã‰laborer, modifier et sauvegarder un scÃ©nario personnalisÃ©">
+                                âœï¸ Ã‰laborer un ScÃ©nario
+                            </button>
+                            <button id="btn-quick-compare-scenarios" class="btn-header-action" title="Ouvrir le module de comparaison A/B des scÃ©narios">
+                                âš–ï¸ Comparer A/B
+                            </button>
+                            <button id="btn-apply-thr" class="btn-header-action btn-thr-glow" title="Appliquer le plan de pompage THR (30 pompes Ã— 24h : Forages F1â†’F12, R500â†’R6, AÃ¯n Bidhaâ†’Zaafraneâ†’Birchagroun, SK10)">
+                                ðŸ› ï¸ ScÃ©nario THR
+                            </button>
+                            <button id="btn-apply-optimal-plan" class="btn-header-action btn-optimal-glow" title="Appliquer le ScÃ©nario Optimale (30 pompes + 4 vannes modulÃ©es)">
+                                âš¡ ScÃ©nario Optimale
+                            </button>
+                            <button id="preset-night" class="btn-header-action">ðŸŒ™ Ã‰co Nuit</button>
+                            <button id="preset-balanced" class="btn-header-action">âš–ï¸ Ã‰quilibrÃ©</button>
+                            <button id="preset-reset" class="btn-header-action">ðŸ”„ RÃ©initialiser</button>
+                        </div>
+                    </div>
+
+                    <div id="schedule-grid-container" class="schedule-table-wrapper">
+                        <!-- Schedule grid table generated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE: VANNES DES Ã‰COULEMENTS GRAVITAIRES & DÃ‰BITS HORAIRES
+                 ================================================================ -->
+            <div id="pane-vannes" class="tab-pane">
+                
+                <!-- Main Header Card with Controls -->
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header" style="flex-wrap:wrap; gap:0.75rem;">
+                        <div>
+                            <div class="dash-card-title" style="font-size:1.15rem;">
+                                ðŸšª Vannes des Ã‰coulements Gravitaires â€” Modulation des DÃ©bits Horaires (00h â†’ 23h)
+                            </div>
+                            <p style="color:var(--text-muted); font-size:0.82rem; margin-top:0.3rem;">
+                                Saisie manuelle des dÃ©bits horaires par vanne (mÂ³/h) â€” IntÃ©gration directe et dynamique dans les Ã©quations d'Ã©tat massiques dV/dt.
+                            </p>
+                        </div>
+
+                        <div class="vannes-header-actions" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+                            <button id="btn-vannes-fill-max" class="btn-header-action btn-primary-glow" title="Remplir toutes les heures avec le dÃ©bit maximal Q_max">
+                                âš¡ DÃ©bits Max (Q_max)
+                            </button>
+                            <button id="btn-vannes-preset-night" class="btn-header-action btn-optimal-glow" title="Favoriser le transfert de nuit et effacer en pointe">
+                                ðŸŒ™ DÃ©stockage Nuit
+                            </button>
+                            <button id="btn-vannes-preset-constant" class="btn-header-action" title="Appliquer un dÃ©bit constant Ã©quilibrÃ©">
+                                âš–ï¸ DÃ©bit Constant
+                            </button>
+                            <button id="btn-vannes-reset" class="btn-header-action" title="RÃ©initialiser aux dÃ©bits par dÃ©faut">
+                                ðŸ”„ RÃ©initialiser
+                            </button>
+                            <button id="btn-vannes-apply-now" class="btn-header-action btn-primary-glow" title="Calculer la simulation">
+                                â–¶ Lancer Calcul
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Valve KPIs Summary Cards -->
+                    <div id="vannes-kpi-summary-grid" class="vannes-kpi-grid" style="margin-top:1.25rem;"></div>
+                </div>
+
+                <!-- 24-Hour Interactive Valves Matrix Table -->
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">
+                            ðŸ“Š Matrice Interactive des DÃ©bits Horaires par Vanne (00h Ã  23h)
+                        </div>
+                        <span class="dash-card-badge" style="background:rgba(124,58,237,0.18); color:#c084fc;">
+                            Cellules Ã‰ditables Â· DÃ©bit en mÂ³/h
+                        </span>
+                    </div>
+                    
+                    <div class="vannes-matrix-toolbar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+                        <div class="vannes-legend-group">
+                            <span class="vannes-legend-item"><span class="badge-legend badge-hc"></span> Nuit (00h-08h / 23h)</span>
+                            <span class="vannes-legend-item"><span class="badge-legend badge-hpm"></span> Pointe Matin (08h-13h)</span>
+                            <span class="vannes-legend-item"><span class="badge-legend badge-hp"></span> Jour (13h-19h)</span>
+                            <span class="vannes-legend-item"><span class="badge-legend badge-hps"></span> Pointe Soir (19h-23h)</span>
+                        </div>
+                        <div class="vannes-quick-copy">
+                            <small style="color:var(--text-muted);">ðŸ’¡ Modifiez les valeurs heure par heure : les Ã©quations hydrauliques de bilan de masse sont recalculÃ©es en direct.</small>
+                        </div>
+                    </div>
+
+                    <div id="vannes-matrix-container" class="vannes-table-wrapper" style="overflow-x:auto;">
+                        <!-- Matrix Table dynamically rendered by app.js -->
+                    </div>
+                </div>
+
+                <!-- 24h Valve Flow Evolution Chart -->
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">
+                            ðŸ“ˆ Profil Temporel des DÃ©bits des Vannes Gravitaires Q_g(t) (mÂ³/h)
+                        </div>
+                        <span class="dash-card-badge">Simulation 24h</span>
+                    </div>
+                    <div class="chart-box-container" style="height:340px;">
+                        <canvas id="chart-vannes-flows"></canvas>
+                    </div>
+                </div>
+
+                <!-- Mathematical Formulation & Equations Breakdown Card -->
+                <div class="dash-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">
+                            ðŸ“ Ã‰quations Hydrauliques & Prise en Compte des DÃ©bits des Vannes
+                        </div>
+                        <span class="dash-card-badge" style="background:rgba(6,182,212,0.15); color:#38bdf8;">
+                            dV/dt = âˆ‘Q_in âˆ’ âˆ‘Q_out âˆ’ Demande
+                        </span>
+                    </div>
+                    <div class="vannes-math-equations-grid">
+                        <div class="vannes-math-card">
+                            <div class="vmc-badge" style="background:#7c3aed;">Vanne R6 â†’ R5</div>
+                            <div class="vmc-formula">
+                                <code>V_{R5}(t+1) = V_{R5}(t) + \mathbf{Q_g(R6\rightarrow R5, t)} - D_{zone\ R5}(t)</code>
+                            </div>
+                            <div class="vmc-formula">
+                                <code>V_{R6}(t+1) = V_{R6}(t) + \sum Q_{in,R6}(t) - \mathbf{Q_g(R6\rightarrow R5, t)} - Q_p(R6\rightarrow R1, t) - D_{zone\ R6}(t)</code>
+                            </div>
+                            <p>DÃ©stocke l'eau du rÃ©servoir pivot R6 (5 000 mÂ³) vers le rÃ©servoir de distribution R5 (1 500 mÂ³).</p>
+                        </div>
+
+                        <div class="vannes-math-card">
+                            <div class="vmc-badge" style="background:#ec4899;">Vanne R1 â†’ R7</div>
+                            <div class="vmc-formula">
+                                <code>V_{R7}(t+1) = V_{R7}(t) + \mathbf{Q_g(R1\rightarrow R7, t)} - D_{zone\ R7}(t)</code>
+                            </div>
+                            <div class="vmc-formula">
+                                <code>V_{R1}(t+1) = V_{R1}(t) + \dots - \mathbf{Q_g(R1\rightarrow R7, t)} - \dots</code>
+                            </div>
+                            <p>Alimente gravitairement le rÃ©servoir R7 pour couvrir l'Ã©tage alimentÃ© par R7.</p>
+                        </div>
+
+                        <div class="vannes-math-card">
+                            <div class="vmc-badge" style="background:#06b6d4;">Vanne R3 â†’ R10</div>
+                            <div class="vmc-formula">
+                                <code>V_{R10}(t+1) = V_{R10}(t) + \mathbf{Q_g(R3\rightarrow R10, t)} - D_{zone\ R10}(t)</code>
+                            </div>
+                            <div class="vmc-formula">
+                                <code>V_{R3}(t+1) = V_{R3}(t) + Q_p(R1\rightarrow R3, t) - \mathbf{Q_g(R3\rightarrow R10, t)} - D_{zone\ R3}(t)</code>
+                            </div>
+                            <p>TransfÃ¨re par gravitÃ© le volume depuis le bassin R3 vers le rÃ©servoir terminal R10 (Ã©tage alimentÃ© par R10).</p>
+                        </div>
+
+                        <div class="vannes-math-card">
+                            <div class="vmc-badge" style="background:#10b981;">Source Romaine â†’ R1</div>
+                            <div class="vmc-formula">
+                                <code>V_{R1}(t+1) = V_{R1}(t) + \mathbf{Q_g(Source\rightarrow R1, t)} + Q_p(R6\rightarrow R1, t) - \sum Q_{out,R1} - D_{zone\ R1}(t)</code>
+                            </div>
+                            <p>Apport gravitaire naturel et continu de la Source Romaine vers le rÃ©servoir nodal R1.</p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 4: SCHÃ‰MA SYNOPTIQUE PLEIN Ã‰CRAN
+                 ================================================================ -->
+            <div id="pane-schema" class="tab-pane">
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ–¥ï¸ SchÃ©ma Synoptique Vectoriel SCADA Industriel Plein Ã‰cran</div>
+                        <span class="dash-card-badge">Topologie Dynamique</span>
+                    </div>
+                    <!-- SCADA full player controls -->
+                    <div id="scada-player-controls" style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.75rem; background:rgba(0,0,0,0.2); border-radius:var(--radius-sm); margin-bottom:0.5rem; flex-wrap:wrap;">
+                        <button id="btn-mode-24h" class="btn-scada btn-primary" style="font-size:0.75rem; padding:4px 10px;">ðŸ“º Mode 24h</button>
+                        <button id="btn-mode-step" class="btn-scada btn-secondary" style="font-size:0.75rem; padding:4px 10px;">ðŸ”¢ Mode Pas-Ã -Pas</button>
+                        <button id="btn-play-pause" class="btn-scada" style="font-size:0.75rem; padding:4px 10px;">â–¶ Animer</button>
+                        <button id="btn-step-prev" class="btn-scada btn-secondary" style="font-size:0.75rem; padding:4px 10px;">â® -1h</button>
+                        <button id="btn-step-next" class="btn-scada btn-secondary" style="font-size:0.75rem; padding:4px 10px;">â­ +1h</button>
+                        <span id="scada-hour-badge" style="background:rgba(124,58,237,0.3); border:1px solid #7c3aed; color:#c084fc; font-family:var(--font-mono); font-size:0.78rem; padding:3px 10px; border-radius:4px;">23:00</span>
+                        <input type="range" id="scada-time-slider" min="0" max="23" value="23" step="1" style="flex:1; min-width:80px;">
+                    </div>
+                    <div id="scada-full-synoptic-container" style="background:#13142e; border-radius:var(--radius-md); overflow:hidden;"></div>
+                </div>
+
+                <!-- Synoptic Mermaid Schema -->
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ—ºï¸ SchÃ©ma Logique â€” Topologie AEP (Mermaid)</div>
+                        <span class="dash-card-badge">Graphe OrientÃ©</span>
+                    </div>
+                    <div id="synoptic-schema-container" style="padding:0.75rem; overflow:auto;"></div>
+                </div>
+
+                <div class="dash-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ“ Indexation des Emplacements & NumÃ©ros RÃ©seau</div>
+                        <span class="dash-card-badge">Ã‰quipements</span>
+                    </div>
+                    <div id="synoptic-network-interactive-grid" class="synoptic-network-grid"></div>
+                </div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 5: PRO ANALYSER & DÃ‰CISIONS
+                 ================================================================ -->
+            <div id="pane-pro-analyser" class="tab-pane">
+                <!-- KPI Score Cards -->
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:1rem; margin-bottom:1.5rem;">
+                    <div class="dash-card" style="text-align:center; padding:1rem;">
+                        <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px;">Score DÃ©cisionnel</div>
+                        <div id="pro-decision-score" style="font-size:2.5rem; font-weight:800; color:#7c3aed; font-family:var(--font-mono);">--</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">/100</div>
+                    </div>
+                    <div class="dash-card" style="text-align:center; padding:1rem;">
+                        <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px;">RÃ©serve Moy.</div>
+                        <div id="pro-reserve-margin" style="font-size:2.5rem; font-weight:800; color:#06b6d4; font-family:var(--font-mono);">--</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">%</div>
+                    </div>
+                    <div class="dash-card" style="text-align:center; padding:1rem;">
+                        <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px;">HC Ã‰nergie</div>
+                        <div id="pro-energy-saving" style="font-size:2.5rem; font-weight:800; color:#10b981; font-family:var(--font-mono);">--</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">%</div>
+                    </div>
+                    <div class="dash-card" style="text-align:center; padding:1rem;">
+                        <div style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px;">Permutations</div>
+                        <div id="pro-stress-index" style="font-size:2.5rem; font-weight:800; color:#f59e0b; font-family:var(--font-mono);">--</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">on/off 24h</div>
+                    </div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ“Š Distribution Statistique des Volumes</div>
+                    </div>
+                    <div class="chart-box-container" style="height:320px;">
+                        <canvas id="chart-pro-box-stats"></canvas>
+                    </div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ“ˆ Gradient de CoÃ»t vs DÃ©bit PompÃ©</div>
+                    </div>
+                    <div class="chart-box-container" style="height:320px;">
+                        <canvas id="chart-pro-cost-gradient"></canvas>
+                    </div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                                                <div class="dash-card-title">ðŸ• RÃ©partition des DÃ©cisions par PÃ©riode STEG</div>
+                    </div>
+                    <div class="chart-box-container" style="height:340px;">
+                        <canvas id="chart-pro-decision-matrix"></canvas>
+                    </div>
+                </div>
+
+                <!-- Alimentation des Ã©tages â€” Data Science -->
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ© RÃ©partition du Volume Journalier par RÃ©servoir d'Alimentation (R1/R2/R3/R5/R6/R7/R10)</div>
+                        <span class="dash-card-badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">Ã‰tages alimentÃ©s par rÃ©servoir</span>
+                    </div>
+                    <div class="charts-double-row">
+                        <div class="chart-box-container" style="height:340px;">
+                            <canvas id="chart-etage-feeder-donut"></canvas>
+                        </div>
+                        <div class="chart-box-container" style="height:340px;">
+                            <canvas id="chart-etage-ranking-bar"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ¤– Centre d'Aide Ã  la DÃ©cision SCADA & Diagnostic Expert</div>
+                        <span class="dash-card-badge">SystÃ¨me Expert</span>
+                    </div>
+                    <div id="pro-recommendations-list" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:1.25rem;"></div>
+                </div>
+
+                <!-- Live Math Solving Table -->
+                <div class="dash-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ§® Tableau de RÃ©solution Live â€” Contraintes Hydrauliques par RÃ©servoir</div>
+                        <span class="dash-card-badge">Solver 24h</span>
+                    </div>
+                    <div id="pro-math-solving-container" style="overflow-x:auto; padding:0.5rem 0;"></div>
+                </div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 6: TABLEUR EXCEL & FORMULES
+                 ================================================================ -->
+            <div id="pane-excel" class="tab-pane">
+                <div class="dash-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ“— Tableur de Calculs Manuels & ModÃ©lisation Hydraulique type Excel</div>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button id="excel-preset-energy" class="btn-header-action">âš¡ Bilan Ã‰nergie</button>
+                            <button id="excel-preset-hmt" class="btn-header-action">ðŸ’§ HMT</button>
+                            <button id="excel-preset-cost" class="btn-header-action">ðŸ’° CoÃ»ts</button>
+                        </div>
+                    </div>
+                    <div class="datagrid-toolbar" style="display:flex; gap:0.5rem; margin-bottom:1rem; align-items:center; flex-wrap:wrap;">
+                        <div id="cellRefLabel" style="background:var(--purple-main); color:#fff; font-weight:700; padding:6px 12px; border-radius:6px; font-family:var(--font-mono);">A1</div>
+                        <input id="formulaInput" type="text" class="formula-input" style="flex:1; min-width:180px; background:var(--bg-input); border:1px solid var(--border-subtle); color:#fff; padding:8px 12px; border-radius:8px;" placeholder="Saisissez une valeur ou formule (ex: =SOMME(B2:B5), =HMT(7; 756))...">
+                        <button id="excel-btn-add-row" class="btn-header-action">+ Ligne</button>
+                        <button id="excel-btn-add-col" class="btn-header-action">+ Colonne</button>
+                        <button id="excel-btn-del-row" class="btn-header-action" style="background:rgba(239,68,68,0.15); border-color:rgba(239,68,68,0.4); color:#f87171;">âˆ’ Ligne</button>
+                        <button id="excel-btn-del-col" class="btn-header-action" style="background:rgba(239,68,68,0.15); border-color:rgba(239,68,68,0.4); color:#f87171;">âˆ’ Colonne</button>
+                        <button id="excel-btn-csv" class="btn-header-action">Export CSV</button>
+                    </div>
+                    <div class="excel-grid-wrapper" style="overflow-x:auto;">
+                        <table id="excel-table"></table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 7: GUIDE & ARCHITECTURE
+                 ================================================================ -->
+            <div id="pane-guide" class="tab-pane">
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ“š Architecture PÃ©dagogique & Logique du RÃ©seau AEP</div>
+                        <span class="dash-card-badge">Topologie SCADA</span>
+                    </div>
+                    <div id="explainer-diagram-container" style="padding:0.5rem 0;"></div>
+                </div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 8: PARAMÃˆTRES & DONNÃ‰ES DU RÃ‰SEAU
+                 ================================================================ -->
+            <div id="pane-params" class="tab-pane">
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ’¡ Tarifs Ã‰lectricitÃ© STEG & Plages Horaires</div>
+                        <button id="btn-apply-tariffs" class="btn-header-action btn-primary-glow">âš¡ Appliquer Tarifs</button>
+                    </div>
+                    <div id="tariff-timeline-bar" class="tariff-timeline-bar" style="margin-bottom:1rem;"></div>
+                    <div class="tariff-editor-grid">
+                        <div class="tariff-band hc">
+                            <div class="tariff-band-title">ðŸŸ¢ Heures Creuses (HC / Nuit)</div>
+                            <div class="tariff-input-row">
+                                <label>Prix (TND/kWh)</label>
+                                <input type="number" id="tariff-hc" step="0.001" min="0" value="0.222">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>DÃ©but nuit (HH:MM)</label>
+                                <input type="time" id="tariff-hc-start" value="23:00">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>Fin nuit (HH:MM)</label>
+                                <input type="time" id="tariff-hc-end" value="08:00">
+                            </div>
+                        </div>
+                        <div class="tariff-band hp">
+                            <div class="tariff-band-title">ðŸŸ¡ Heures Pleines (HP / Jour)</div>
+                            <div class="tariff-input-row">
+                                <label>Prix (TND/kWh)</label>
+                                <input type="number" id="tariff-hp" step="0.001" min="0" value="0.290">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>DÃ©but Jour 13:00 (HH:MM)</label>
+                                <input type="time" id="tariff-hp-start" value="13:00">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>Fin Jour 19:00 (HH:MM)</label>
+                                <input type="time" id="tariff-hp-end" value="19:00">
+                            </div>
+                        </div>
+                        <div class="tariff-band hpm">
+                            <div class="tariff-band-title">ðŸ”µ Pointe Matin (HPM)</div>
+                            <div class="tariff-input-row">
+                                <label>Prix HPM (TND/kWh)</label>
+                                <input type="number" id="tariff-hpm-val" step="0.001" min="0" value="0.290">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>DÃ©but Matin (HH:MM)</label>
+                                <input type="time" id="tariff-hpm-start" value="08:00">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>Fin Matin (HH:MM)</label>
+                                <input type="time" id="tariff-hpm-end" value="13:00">
+                            </div>
+                        </div>
+                        <div class="tariff-band hph">
+                            <div class="tariff-band-title">ðŸ”´ Pointe SoirÃ©e (HPS)</div>
+                            <div class="tariff-input-row">
+                                <label>Prix HPS (TND/kWh)</label>
+                                <input type="number" id="tariff-hph" step="0.001" min="0" value="0.377">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>DÃ©but SoirÃ©e (HH:MM)</label>
+                                <input type="time" id="tariff-hph-start" value="19:00">
+                            </div>
+                            <div class="tariff-input-row">
+                                <label>Fin SoirÃ©e (HH:MM)</label>
+                                <input type="time" id="tariff-hph-end" value="23:00">
+                            </div>
+                        </div>
+                        <div class="tariff-band tu">
+                            <div class="tariff-band-title">ðŸŸ£ Tarif Unique (TU)</div>
+                            <div class="tariff-input-row">
+                                <label>Tarif TU (TND/kWh)</label>
+                                <input type="number" id="tariff-tu" step="0.001" min="0" value="0.291">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dash-card" style="margin-bottom:1.5rem;">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸš° Demandes Moyennes & Coefficients Horaires (7 Ã©tages alimentÃ©s par R1 â†’ R10)</div>
+                        <button id="btn-apply-demands" class="btn-header-action btn-primary-glow">âš¡ Recalculer Demandes</button>
+                    </div>
+                    <div id="demand-coefs-editor-container"></div>
+                </div>
+
+                <div class="dash-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">âš™ï¸ CaractÃ©ristiques des 38 Ã‰quipements</div>
+                    </div>
+                    <div id="system-data-forms" class="system-form-grid"></div>
+                </div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 2: EPANET SYNOPTIQUE HYDRAULIQUE DYNAMIQUE 24H
+                 ================================================================ -->
+            <div id="pane-epanet-synoptic" class="tab-pane">
+                <div id="epanet-synoptic-container"></div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 3: CARTE SIG INTERACTIVE (LE KEF)
+                 ================================================================ -->
+            <div id="pane-gis-map" class="tab-pane">
+                <div id="gis-map-container"></div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 4: COMPARAISON DES SCÃ‰NARIOS A/B
+                 ================================================================ -->
+            <div id="pane-scenario-compare" class="tab-pane">
+                <div id="scenario-compare-container"></div>
+            </div>
+
+            <!-- ================================================================
+                 TAB PANE 9: GRAND LIVRE BILAN HYDRAULIQUE
+                 ================================================================ -->
+            <div id="pane-table" class="tab-pane">
+                <div class="dash-card">
+                    <div class="dash-card-header">
+                        <div class="dash-card-title">ðŸ“‹ Grand Livre Hydraulique & Bilan Massique â€” RÃ©servoirs (index) Ã— Heures 00hâ†’23h, colorÃ©es par pÃ©riode tarifaire</div>
+                        <div style="display:flex; gap:0.5rem; align-items:center;">
+                            <input type="text" id="table-search-filter" placeholder="ðŸ” Rechercher rÃ©servoir..." style="background:var(--bg-input); border:1px solid var(--border-subtle); color:#fff; padding:6px 12px; border-radius:6px; font-size:0.8rem; width:180px;">
+                            <button id="btn-export-table-csv" class="btn-header-action">ðŸ“¥ Exporter CSV</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table id="detailed-results-table" class="data-table"></table>
+                    </div>
+                </div>
+            </div>
+
+
+        </main>
+    </div>
+
+    <!-- Optimization Progress Modal -->
+    <div id="opt-progress-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box opt-progress-box">
+            <div class="opt-progress-header">
+                <div class="opt-spinner-glow">âš¡</div>
+                <div>
+                    <h3 id="opt-modal-title">Optimisation MathÃ©matique & RÃ©solution MILP (PuLP / CBC)</h3>
+                    <p id="opt-modal-desc">Minimisation exacte du coÃ»t d'Ã©nergie STEG sur les donnÃ©es personnalisÃ©es du rÃ©seau...</p>
+                </div>
+            </div>
+            <div class="opt-progress-bar-track">
+                <div id="opt-progress-bar-fill" class="opt-progress-bar-fill" style="width: 0%;"></div>
+            </div>
+            <div class="opt-progress-pct-row">
+                <span id="opt-stage-label">Initialisation du solveur...</span>
+                <strong id="opt-pct-label">0%</strong>
+            </div>
+            <div class="opt-steps-checklist">
+                <div class="opt-step-item" id="opt-step-1"><span class="step-icon">âšª</span> Validation des donnÃ©es modifiÃ©es, 12 forages, 12 rÃ©servoirs et demandes E1â†’E7</div>
+                <div class="opt-step-item" id="opt-step-2"><span class="step-icon">âšª</span> ModÃ©lisation mathÃ©matique exacte PuLP (bilan massique 24h, Vmin â‰¤ V â‰¤ Vmax, STEG)</div>
+                <div class="opt-step-item" id="opt-step-3"><span class="step-icon">âšª</span> RÃ©solution Branch & Bound avec CBC (temps limite configurable 120s / 180s / 300s)</div>
+                <div class="opt-step-item" id="opt-step-4"><span class="step-icon">âšª</span> Validation hydraulique EPANET & application immÃ©diate au Cockpit</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Labels & Alias Modal -->
+    <div id="labels-alias-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box labels-modal-box" style="max-width:860px; width:96%;">
+            <div class="modal-header">
+                <h3>ðŸ·ï¸ Personnalisation des Noms &amp; Alias des Ã‰quipements</h3>
+                <button id="btn-close-labels-modal" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Group Tabs -->
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem; padding-bottom:0.75rem; border-bottom:1px solid rgba(255,255,255,0.1);">
+                    <button type="button" class="labels-tab-btn btn-scada active" data-group="reservoirs" style="font-size:0.78rem;">ðŸ—ï¸ RÃ©servoirs</button>
+                    <button type="button" class="labels-tab-btn btn-scada" data-group="pompes" style="font-size:0.78rem;">âš™ï¸ Pompes</button>
+                    <button type="button" class="labels-tab-btn btn-scada" data-group="vannes" style="font-size:0.78rem;">ðŸš° Vannes</button>
+                    <button type="button" class="labels-tab-btn btn-scada" data-group="zones" style="font-size:0.78rem;">ðŸ˜ï¸ Zones AEP</button>
+                </div>
+                <!-- Table Container -->
+                <div id="labels-editor-table-container" style="max-height:48vh; overflow-y:auto;"></div>
+                <div style="display:flex; justify-content:flex-end; gap:0.6rem; margin-top:1rem;">
+                    <button id="btn-reset-labels" class="btn-scada btn-danger">ðŸ”„ Noms par DÃ©faut</button>
+                    <button id="btn-apply-labels" class="btn-scada btn-primary">âœ… Appliquer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scenario Modal -->
+    <div id="scenario-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box scenario-modal-box">
+            <div class="modal-header">
+                <h3>ðŸ—„ï¸ Gestionnaire de ScÃ©narios Hydrauliques</h3>
+                <button id="btn-close-scenario-modal" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="save-scenario-form" style="display:flex; gap:0.5rem; margin-bottom:1rem;">
+                    <input type="text" id="input-scenario-name" placeholder="Nom du scÃ©nario (ex: Ã‰tÃ© Fortes Chaleurs)..." style="flex:1; background:var(--bg-input); border:1px solid var(--border-subtle); color:#fff; padding:8px 12px; border-radius:8px;">
+                    <button id="btn-save-current-scenario" class="btn-header-action btn-primary-glow">ðŸ’¾ Enregistrer Actuel</button>
+                </div>
+                <div id="scenarios-list-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Advanced Scenario Builder & Elaborator Modal -->
+    <div id="scenario-builder-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box scenario-builder-modal-box" style="max-width:850px; width:95%;">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="font-size:1.4rem;">âœï¸</span>
+                    <div>
+                        <h3 style="margin:0; font-size:1.1rem; color:#fff;">Ã‰laborateur de ScÃ©nario d'Exploitation Hydraulique</h3>
+                        <small style="color:var(--text-muted);">ParamÃ©trez un plan d'exploitation sur-mesure pour simulation et comparaison A/B</small>
+                    </div>
+                </div>
+                <button id="btn-close-builder-modal" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body" style="max-height:75vh; overflow-y:auto;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:1rem; margin-bottom:1rem;">
+                    <div class="form-field">
+                        <label style="color:#38bdf8; font-weight:700; font-size:0.8rem; display:block; margin-bottom:4px;">Nom du ScÃ©nario :</label>
+                        <input type="text" id="sb-input-name" placeholder="ex: Plan Canicule / Maintenance Forages" style="width:100%; background:var(--bg-input); border:1px solid var(--border-subtle); color:#fff; padding:8px 12px; border-radius:6px; font-size:0.85rem;">
+                    </div>
+                    <div class="form-field">
+                        <label style="color:#a855f7; font-weight:700; font-size:0.8rem; display:block; margin-bottom:4px;">ModÃ¨le de DÃ©part (Base) :</label>
+                        <select id="sb-select-template" class="scada-select" style="width:100%; padding:8px 12px; border-radius:6px; background:var(--bg-input); color:#fff; border:1px solid var(--border-subtle);">
+                            <option value="current">Ã‰tat Actuel du Cockpit</option>
+                            <option value="optimal">ScÃ©nario Optimale MILP (30 Pompes + Vannes)</option>
+                            <option value="baseline">ScÃ©nario Baseline (Nominal)</option>
+                            <option value="thr">ScÃ©nario THR (Haut DÃ©bit / Urgence)</option>
+                            <option value="night">ScÃ©nario Ã‰co Nuit (HC 23h-08h)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-field" style="margin-bottom:1.2rem;">
+                    <label style="color:var(--text-muted); font-size:0.8rem; display:block; margin-bottom:4px;">Description / Objectif OpÃ©rationnel :</label>
+                    <input type="text" id="sb-input-desc" placeholder="ex: RÃ©duction de 35% de la facture STEG en dÃ©lestant les heures de pointe..." style="width:100%; background:var(--bg-input); border:1px solid var(--border-subtle); color:#fff; padding:8px 12px; border-radius:6px; font-size:0.85rem;">
+                </div>
+
+                <div style="background:rgba(20,21,48,0.6); border:1px solid rgba(255,255,255,0.08); border-radius:8px; padding:1rem; margin-bottom:1.2rem;">
+                    <h4 style="color:#34d399; margin:0 0 0.75rem 0; font-size:0.9rem;">âš™ï¸ ParamÃ©trage Rapide des Pompes & Vannes</h4>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.75rem;">
+                        <label style="display:flex; align-items:center; gap:0.5rem; color:#fff; font-size:0.8rem; cursor:pointer;">
+                            <input type="checkbox" id="sb-chk-efface-peak" checked>
+                            <span>Effacement Pointe SoirÃ©e (19h-23h)</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:0.5rem; color:#fff; font-size:0.8rem; cursor:pointer;">
+                            <input type="checkbox" id="sb-chk-boost-night" checked>
+                            <span>Boost Pompage Heures Creuses (23h-08h)</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:0.5rem; color:#fff; font-size:0.8rem; cursor:pointer;">
+                            <input type="checkbox" id="sb-chk-modulate-valves" checked>
+                            <span>Modulation Dynamique des Vannes (Q_max Nuit)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-top:1.25rem;">
+                    <button id="sb-btn-preview-sim" class="btn-scada" style="font-size:0.85rem;">
+                        ðŸ” PrÃ©visualiser Calcul
+                    </button>
+                    <div style="display:flex; gap:0.6rem;">
+                        <button id="sb-btn-cancel" class="btn-scada btn-secondary">Annuler</button>
+                        <button id="sb-btn-save-scenario" class="btn-scada btn-primary-glow">ðŸ’¾ Enregistrer ScÃ©nario</button>
+                        <button id="sb-btn-save-and-apply" class="btn-scada btn-optimal-glow">âš¡ Enregistrer & Appliquer au Cockpit</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container"></div>
+
+    <!-- Optimizer Error Messages (hidden, used by optimizer.js) -->
+    <div id="error-messages" style="display:none;"></div>
+
+    <!-- Modal Loading Overlay -->
+    <div id="loading-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="spinner"></div>
+            <h3 id="modal-title" style="color:var(--text-main); font-size:1.1rem; margin-bottom:0.5rem;">Calcul en cours...</h3>
+            <p id="modal-desc" style="color:var(--text-muted); font-size:0.85rem;">Simulation du bilan hydraulique et financier AEP...</p>
+        </div>
+    </div>
+    <script src="js/simulation.js?v=1.0.0"></script>
+    <script src="js/optimizer.js?v=1.0.0"></script>
+    <script src="js/api-mock.js?v=1.0.0"></script>
+
+
+    <script type="module" src="js/app.js?v=1.2.0"></script>
+</body>
+</html>
